@@ -5,7 +5,7 @@ const ctx = canvas.getContext('2d');
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 15;
+const totalAssets = 16;
 
 // Game states
 let currentGameState = 'loading';
@@ -135,9 +135,10 @@ let gameData = {
 
 // Asset file paths
 const assetPaths = {
-    level1: 'FullAssets/Levels-Flattened-Layer/Level-.png',
-    level2: 'FullAssets/Levels-Flattened-Layer/Level-2.png',
-    level3: 'FullAssets/Levels-Flattened-Layer/Level-3.png',
+    background: 'assets/background.png',
+    terrain1: 'assets/terrain1.png',
+    terrain2: 'assets/terrain2.png',
+    terrain3: 'assets/terrain3.png', 
     sonicIdle: 'assets/sonic_idle.png',
     sonicRun: 'assets/sonic_run.png',
     sonicSpin: 'assets/Sonic-Spin.png',
@@ -330,102 +331,133 @@ let rings = [];
 let badniks = [];
 let levelEndSign = null;
 
-// GROUND HEIGHTMAPS
-// Ground height read directly from the level art, one measured value per
-// pixel column — no formulas, no synthetic curves. Extracted offline from
-// FullAssets/Levels-Flattened-Layer/*.png by scanning each column bottom-up
-// for the top of the grass/dirt mass connected to the ground, then a light
-// median filter to drop single-column noise (anti-aliasing, thin decorative
-// sprites like tree trunks) while preserving genuine terrain features.
-// This same array drives both collision (getGroundLevel) and rendering
-// (the level image is drawn as-is), so art and collision cannot disagree.
-const HEIGHTMAP_LEVEL1 = [198,198,198,198,198,198,198,198,198,198,198,198,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,196,196,196,196,196,196,196,195,195,195,195,195,195,195,195,195,194,194,194,194,194,194,194,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,195,195,196,196,196,196,196,196,196,196,196,196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,196,196,196,196,196,196,196,196,196,196,196,196,196,195,195,195,195,195,195,195,195,194,194,194,194,194,194,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,194,194,194,194,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,195,195,195,196,196,196,196,196,196,196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,196,196,196,196,196,196,196,195,195,195,195,195,195,195,195,195,194,194,194,194,194,194,194,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,195,195,196,196,196,196,196,196,196,196,196,196,196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,197,197,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198,198];
-const HEIGHTMAP_LEVEL2 = [181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,181,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,181,181,181,181,181,181,181,181,181,181,181,183,183,183,183,183,183,183,183,183,188,188,188,188,188,189,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,191,191,191,189,189,189,189,189,189,189,184,183,183,183,183,183,183,183,183,183,183,181,181,181,181,181,181,181,181,181,181,181,180,180,180,180,180,180,180,180,180,180,180,181,181,181,181,181,181,181,181,183,183,183,183,183,183,183,183,183,183,183,183,183,183,183,183,183,184,188,188,188,188,189,192,192,192,194,195,195,195,195,195,195,195,195,195,195,195,195,195,194,194,194,194,194,194,194,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,194,194,192,192,192,192,192,192,192,192,192,192,192,192,192,192,192,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,192,192,192,191,191,191,189,189,189,189,183,183,183,183,181,181,181,181,181,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,180,181,181,181,181,183,183,183,183,183,183,183,183,183,183,183,183,183,183,183,184,184,184,184,184,184,188,188,188,188,188,188,188,188,189,189,189,189,194,189,194,194];
-const HEIGHTMAP_LEVEL3 = [1203,1204,1204,1205,1205,1205,1205,1205,1205,1207,1207,1207,1207,1210,1210,1210,1210,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1211,1211,1211,1211,1211,1216,1217,1218,1219,1223,1223,1224,1224,1224,1224,1224,1224,1224,1224,1224,1223,1223,1223,1219,1218,1217,1217,1217,1216,1210,1209,1207,1206,1206,1206,1205,1205,1205,1202,1202,1202,1202,1202,1205,1206,1207,1207,1208,1209,1210,1210,1211,1211,1211,1211,1211,1211,1212,1212,1212,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1217,1228,1231,1237,1237,1237,1237,1238,1238,1239,1239,1239,1240,1240,1241,1241,1246,1248,1248,1248,1248,1248,1248,1249,1251,1252,1252,1256,1257,1257,1269,1269,1269,1269,1269,1269,1269,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1270,1269,1268,1268,1268,1268,1268,1268,1262,1262,1262,1261,1261,1261,1261,1260,1260,1259,1259,1259,1259,1259,1259,1258,1258,1258,1258,1256,1256,1256,1255,1255,1254,1253,1253,1252,1246,1244,1243,1241,1234,1234,1234,1234,1233,1233,1233,1216,1216,1216,1215,1214,1214,1212,1211,1211,1211,1211,1211,1211,1211,1211,1210,1210,1210,1209,1209,1208,1208,1208,1208,1208,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1208,1209,1210,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1212,1212,1212,1212,1212,1212,1212,1212,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1212,1212,1212,1212,1212,1212,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1210,1209,1208,1208,1208,1208,1208,1208,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1207,1208,1208,1208,1208,1208,1208,1208,1208,1208,1208,1208,1211,1211,1212,1212,1213,1213,1214,1216,1217,1219,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1216,1216,1216,1214,1214,1209,1206,1206,1206,1206,1205,1204,1203,1203,1203,1203,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1203,1203,1203,1203,1204,1204,1206,1208,1209,1210,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1211,1211,1211,1210,1210,1210,1210,1210,1210,1210,1210,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1209,1210,1210,1210,1210,1210,1210,1211,1212,1212,1212,1220,1222,1222,1226,1226,1226,1226,1238,1238,1240,1242,1243,1244,1245,1246,1247,1255,1255,1255,1256,1256,1256,1256,1256,1256,1256,1257,1259,1260,1260,1260,1260,1260,1260,1260,1261,1261,1261,1262,1262,1263,1265,1265,1266,1266,1266,1266,1266,1266,1266,1266,1266,1267,1267,1268,1268,1268,1268,1268,1268,1268,1268,1268,1268,1267,1267,1267,1267,1267,1267,1267,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1266,1264,1262,1262,1261,1261,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1260,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1259,1258,1258,1258,1258,1258,1257,1255,1255,1254,1254,1254,1254,1254,1254,1254,1252,1251,1251,1248,1248,1247,1247,1245,1244,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1235,1234,1232,1230,1229,1228,1227,1225,1224,1224,1224,1224,1224,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1223,1222,1222,1221,1221,1220,1220,1220,1215,1215,1215,1215,1214,1214,1213,1213,1205,1202,1202,1201,1200,1200,1200,1200,1200,1200,1200,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1200,1200,1200,1200,1200,1200,1200,1200,1201,1201,1202,1202,1205,1206,1206,1206,1206,1206,1206,1206,1206,1206,1211,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1213,1213,1213,1213,1213,1213,1212,1206,1206,1206,1205,1205,1200,1200,1199,1199,1199,1199,1199,1199,1199,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1199,1199,1199,1199,1199,1199,1199,1200,1200,1221,1226,1227,1228,1228,1231,1231,1231,1231,1231,1231,1231,1231,1230,1228,1228,1228,1212,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1205,1207,1208,1209,1209,1210,1212,1214,1214,1214,1214,1213,1212,1212,1211,1211,1210,1209,1209,1208,1208,1207,1205,1204,1204,1204,1204,1204,1204,1204,1204,1203,1203,1203,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1203,1203,1204,1204,1204,1204,1204,1205,1207,1208,1208,1209,1209,1210,1211,1211,1211,1211,1211,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1212,1211,1211,1211,1211,1211,1211,1211,1210,1210,1209,1206,1205,1205,1201,1201,1201,1201,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1200,1200,1200,1200,1200,1200,1200,1200,1201,1201,1201,1201,1204,1205,1205,1206,1207,1209,1209,1209,1209,1209,1207,1207,1207,1206,1206,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1206,1206,1206,1206,1206,1206,1206,1206,1206,1205,1205,1205,1204,1204,1204,1203,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1199,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1200,1203,1203,1203,1203,1204,1204,1204,1204,1204,1204,1204,1204,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1211,1212,1212,1212,1212,1211,1211,1211,1211,1211,1211,1211,1211,1211,1210,1210,1210,1209,1209,1208,1207,1207,1206,1206,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1205,1206,1206,1207,1207,1208,1209,1209,1210,1210,1210,1210,1212,1213,1214,1214,1214,1214,1214,1216,1216,1216,1216,1216,1216,1216,1217,1218,1218,1218,1219,1232,1233,1243,1244,1244,1244,1245,1245,1246,1250,1252,1252,1253,1257,1257,1257,1260,1261,1261,1261,1261,1262,1262,1262,1262,1263,1264,1265,1265,1266,1266,1266,1266,1266,1267,1269,1269,1269,1269,1269,1270,1270,1270,1271,1271,1271,1271,1271,1271,1271,1270,1270,1270,1269,1269,1269,1269,1268,1268,1267,1266,1266,1267,1268,1268,1269,1269,1269,1269,1270,1271,1271,1271,1272,1272,1272,1272,1272,1272,1272,1272,1272,1272,1272,1272,1272,1272,1272,1271,1271,1270,1270,1270,1270,1270,1270,1269,1269,1268,1268,1268,1268,1268,1267,1266,1266,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1264,1263,1263,1262,1262,1262,1262,1262,1262,1262,1261,1261,1261,1261,1260,1260,1259,1258,1257,1257,1255,1250,1250,1249,1249,1242,1240,1235,1234,1234,1225,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1223,1223,1222,1222,1222,1222,1216,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1204,1205,1205,1205,1204,1204,1204,1204,1204,1203,1203,1203,1203,1203,1201,1201,1201,1201,1201,1201,1201,1201,1201,1201,1201,1199,1199,1199,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1198,1199,1200,1200,1200,1200,1200,1200,1201,1201,1201,1201,1201,1201,1201,1201,1201,1202,1203,1203,1203,1204,1204,1204,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1210,1211,1211,1211,1211,1223,1223,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1224,1236,1237,1238,1245,1248,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1262,1259,1259,1259,1259,1259,1258,1258,1258,1258,1258,1256,1256,1256,1255,1255,1255,1255,1255,1252,1250,1248,1247,1245,1244,1219,1219,1218,1218,1218,1217,1215,1215,1214,1212,1212,1211,1211,1210,1209,1208,1206,1205,1204,1204,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1202,1203,1204,1204,1205,1206,1211,1212,1212,1212,1212,1212,1212,1212,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1213,1214,1214,1214,1214,1216,1216,1223,1223,1225,1225,1230,1230,1230,1230,1230,1230,1230,1230,1230,1230,1230,1230,1230,1230];
+// Level constants
+const LEVEL_WIDTH = 4800;
+const LEVEL_END_X = LEVEL_WIDTH - 200;
 
-const LEVELS = [
-    { imageKey: 'level1', width: 512, height: 257, heightmap: HEIGHTMAP_LEVEL1 },
-    { imageKey: 'level2', width: 419, height: 350, heightmap: HEIGHTMAP_LEVEL2 },
-    { imageKey: 'level3', width: 1808, height: 1288, heightmap: HEIGHTMAP_LEVEL3 }
-];
-let currentLevelIndex = 0;
+// GROUND HEIGHTMAP
+// Single source of truth for both ground collision and terrain art: a
+// continuous, piecewise-linear array of segments built from a repeating
+// flat/cliff/hill pattern. Each segment starts where the previous one ended,
+// so there are no height discontinuities at tile boundaries, and terrain
+// rendering below reads the same tile-type pattern used to build it.
+const GROUND_TILE_WIDTH = 320;
+const GROUND_PATTERN = ['flat', 'cliff', 'hill'];
+const GROUND_RISE = 80;
 
-function getCurrentLevel() {
-    return LEVELS[currentLevelIndex];
+function buildGroundSegments() {
+    const segments = [];
+    const tileCount = Math.ceil(LEVEL_WIDTH / GROUND_TILE_WIDTH) + 1;
+    let startY = 505;
+
+    for (let i = 0; i < tileCount; i++) {
+        const type = GROUND_PATTERN[i % GROUND_PATTERN.length];
+        const startX = i * GROUND_TILE_WIDTH;
+        const endX = startX + GROUND_TILE_WIDTH;
+        let endY = startY;
+        if (type === 'cliff') endY = startY - GROUND_RISE;
+        if (type === 'hill') endY = startY + GROUND_RISE;
+
+        segments.push({ startX, endX, startY, endY, type });
+        startY = endY;
+    }
+    return segments;
 }
 
-// Real-pixel-data lookup — one measured height per column, direct index, no interpolation.
-function getGroundLevel(level, x) {
-    const xi = Math.max(0, Math.min(Math.round(x), level.heightmap.length - 1));
-    return level.heightmap[xi];
+const groundSegments = buildGroundSegments();
+
+function getGroundTileType(tileIndex) {
+    const patternLength = GROUND_PATTERN.length;
+    return GROUND_PATTERN[((tileIndex % patternLength) + patternLength) % patternLength];
 }
 
-// Max height Sonic can walk up without jumping. A rise in the art bigger
-// than this is a real wall — movement into it is blocked rather than
-// auto-snapped, so climbing it requires an actual jump. Set above the
-// small natural undulation left in the measured ground (grass/bush texture,
-// a couple dozen pixels at most) so normal walking stays smooth and only
-// genuine architectural rises/cliffs register as walls.
-const STEP_THRESHOLD = 28;
+function getGroundLevel(x) {
+    const clampedX = Math.min(Math.max(x, 0), LEVEL_WIDTH);
+    const segment = groundSegments[Math.min(
+        Math.floor(clampedX / GROUND_TILE_WIDTH),
+        groundSegments.length - 1
+    )];
+    const t = (clampedX - segment.startX) / (segment.endX - segment.startX);
+    return segment.startY + (segment.endY - segment.startY) * t;
+}
 
 // Initialize game world
 function initializeGame() {
-    const level = getCurrentLevel();
-    console.log(`Initializing game on level ${currentLevelIndex + 1} (${level.width}x${level.height})...`);
-
-    // Rings — spaced across the level, floating a bit above the real ground at each x
+    console.log('Initializing game...');
+    
+    // Create rings
     rings = [];
-    const ringSpacing = 70;
-    const ringMargin = 80;
-    for (let x = ringMargin; x < level.width - ringMargin; x += ringSpacing) {
-        const jitterX = x + (Math.random() * 20 - 10);
-        const groundY = getGroundLevel(level, jitterX);
+    for (let i = 0; i < 60; i++) {
         rings.push({
-            x: jitterX,
-            y: groundY - 40 - Math.random() * 40,
+            x: 200 + i * 80 + Math.random() * 40,
+            y: 280 + Math.sin(i * 0.5) * 60,
             collected: false,
-            animationFrame: Math.random() * Math.PI
+            animationFrame: 0
         });
     }
-
-    // Badniks — patrol on the real ground, spaced across the level
+    
+    const bonusClusters = [
+        {x: 800, y: 250}, {x: 1200, y: 300}, {x: 1800, y: 280}, 
+        {x: 2400, y: 320}, {x: 3000, y: 250}, {x: 3600, y: 290},
+        {x: 4200, y: 300}
+    ];
+    
+    bonusClusters.forEach(cluster => {
+        for (let i = 0; i < 5; i++) {
+            rings.push({
+                x: cluster.x + i * 30,
+                y: cluster.y + Math.sin(i) * 20,
+                collected: false,
+                animationFrame: Math.random() * Math.PI
+            });
+        }
+    });
+    
+    // Create badniks
     badniks = [];
-    const badnikSpacing = Math.max(220, Math.floor(level.width / 6));
-    let typeToggle = 1;
-    for (let x = 200; x < level.width - 150; x += badnikSpacing) {
-        const groundY = getGroundLevel(level, x);
+    const badnikPositions = [
+        {x: 500, y: 416, type: 1}, 
+        {x: 1000, y: 416, type: 2}, 
+        {x: 1500, y: 416, type: 1}, 
+        {x: 2000, y: 416, type: 2},
+        {x: 2500, y: 416, type: 1}, 
+        {x: 3000, y: 416, type: 2},
+        {x: 3500, y: 416, type: 1},
+        {x: 1100, y: 326, type: 2},
+        {x: 2700, y: 316, type: 1},
+        {x: 3500, y: 306, type: 2}
+    ];
+    
+    badnikPositions.forEach(pos => {
         badniks.push({
-            x,
-            y: groundY - 32,
+            x: pos.x,
+            y: pos.y - 89,
             width: 32,
             height: 32,
-            type: typeToggle,
-            velocityX: typeToggle === 1 ? 1.5 : -1.5,
-            direction: typeToggle === 1 ? 1 : -1,
+            type: pos.type, 
+            velocityX: pos.type === 1 ? 1.5 : -1.5, 
+            direction: pos.type === 1 ? 1 : -1,
             destroyed: false,
-            animationFrame: 0,
-            animationSpeed: 0.15,
-            frameCount: 2,
-            patrolDistance: 80,
-            startX: x
+            animationFrame: 0, 
+            animationSpeed: 0.15, 
+            frameCount: 2, 
+            patrolDistance: 120, 
+            startX: pos.x 
         });
-        typeToggle = typeToggle === 1 ? 2 : 1;
-    }
-
-    // Level end sign near the right edge, resting on the real ground
-    const signX = level.width - 120;
+    });
+    
+    // Create level end sign
     levelEndSign = {
-        x: signX,
-        y: getGroundLevel(level, signX + 40) - 96,
-        width: 80,
+        x: LEVEL_END_X,
+        y: 400,
+        width: 80,                
         height: 96,
         crossed: false
     };
-
-    // Reset Sonic at the left edge, standing on the real ground
-    const spawnX = Math.min(60, level.width - sonic.width - 10);
-    sonic.x = spawnX;
-    sonic.y = getGroundLevel(level, spawnX + sonic.width / 2) - sonic.height;
+    
+    // Reset Sonic
+    sonic.x = 100;
+    sonic.y = 441;
     sonic.velocityX = 0;
     sonic.velocityY = 0;
     sonic.isSpinDashing = false;
@@ -435,15 +467,12 @@ function initializeGame() {
     sonic.lastJumpTime = 0;
     sonic.isHurt = false;
     sonic.hurtTimer = 0;
-
-    camera.x = 0;
-    camera.y = 0;
-
+    
     // Reset game state
     gameData.rings = 0;
     gameData.time = 0;
     gameData.gameStartTime = Date.now();
-
+    
     console.log('Game initialized with', rings.length, 'rings and', badniks.length, 'badniks!');
 }
 
@@ -536,34 +565,11 @@ function update() {
     if (sonic.velocityY > TERMINAL_VELOCITY) {
         sonic.velocityY = TERMINAL_VELOCITY;
     }
-
-    const level = getCurrentLevel();
-
-    // Horizontal wall collision — a rise in the terrain itself (not just
-    // Sonic's current height, which swings wildly over a normal jump arc)
-    // bigger than a walkable step is a real wall: block movement into it
-    // instead of auto-snapping up. Comparing the ground at his current
-    // column to the ground ahead means this only engages near an actual
-    // cliff/step in the art, never mid-jump over ordinary ground. Once his
-    // feet have risen above the far column's height, he's cleared it and
-    // may pass over.
-    if (sonic.velocityX !== 0) {
-        const dir = sonic.velocityX > 0 ? 1 : -1;
-        const leadingX = dir > 0
-            ? sonic.x + sonic.width + sonic.velocityX
-            : sonic.x + sonic.velocityX;
-        const groundHere = getGroundLevel(level, sonic.x + sonic.width / 2);
-        const groundAhead = getGroundLevel(level, leadingX);
-        const feetY = sonic.y + sonic.height;
-        if (groundHere - groundAhead > STEP_THRESHOLD && feetY > groundAhead) {
-            sonic.velocityX = 0;
-        }
-    }
-
+    
     // Update Sonic's position
     sonic.x += sonic.velocityX;
     sonic.y += sonic.velocityY;
-
+    
     // Update hurt state
     if (sonic.isHurt) {
         sonic.hurtTimer--;
@@ -571,11 +577,11 @@ function update() {
             sonic.isHurt = false;
         }
     }
-
-    // Ground detection — single velocity-guarded snap against the real heightmap
+    
+    // Ground detection — single velocity-guarded snap against the continuous heightmap
     sonic.onGround = false;
     const sonicCenterX = sonic.x + sonic.width / 2;
-    const groundLevel = getGroundLevel(level, sonicCenterX);
+    const groundLevel = getGroundLevel(sonicCenterX);
 
     if (sonic.velocityY >= 0 && sonic.y + sonic.height >= groundLevel) {
         sonic.y = groundLevel - sonic.height;
@@ -583,35 +589,53 @@ function update() {
         sonic.onGround = true;
         sonic.canDoubleJump = false;
     }
-
-    // Keep Sonic within the level's horizontal bounds
+    
+    // Additional platform collision for scattered platforms
+    const scatteredPlatforms = [
+        {x: 1100, y: 350, width: 150, height: 40},
+        {x: 1800, y: 330, width: 180, height: 40},
+        {x: 2600, y: 340, width: 200, height: 40},
+        {x: 3400, y: 335, width: 170, height: 40},
+        {x: 4200, y: 360, width: 150, height: 40}
+    ];
+    
+    for (let platform of scatteredPlatforms) {
+        if (sonic.x + sonic.width > platform.x &&
+            sonic.x < platform.x + platform.width &&
+            sonic.y + sonic.height > platform.y &&
+            sonic.y < platform.y + platform.height) {
+            
+            if (sonic.velocityY >= 0 &&
+                sonic.y + sonic.height - sonic.velocityY <= platform.y + 4) {
+                sonic.y = platform.y - sonic.height;
+                sonic.velocityY = 0;
+                sonic.onGround = true;
+                sonic.canDoubleJump = false;
+            }
+        }
+    }
+    
+    // Keep Sonic in bounds
     if (sonic.x < 0) {
         sonic.x = 0;
         sonic.velocityX = 0;
         sonic.isRolling = false;
     }
-    if (sonic.x + sonic.width > level.width) {
-        sonic.x = level.width - sonic.width;
-        sonic.velocityX = 0;
-    }
-
-    // Reset if Sonic falls off the bottom of the level (a real pit/gap in the art)
-    if (sonic.y > level.height + 100) {
-        const spawnX = Math.min(60, level.width - sonic.width - 10);
-        sonic.x = spawnX;
-        sonic.y = getGroundLevel(level, spawnX + sonic.width / 2) - sonic.height;
+    
+    // Reset if Sonic falls off screen
+    if (sonic.y > canvas.height + 100) {
+        sonic.x = 100;
+        sonic.y = 441;
         sonic.velocityX = 0;
         sonic.velocityY = 0;
         sonic.isSpinDashing = false;
         sonic.isRolling = false;
         sonic.spinDashCharge = 0;
     }
-
-    // Camera follows Sonic, clamped to the level's actual bounds (both axes)
-    camera.x = sonic.x + sonic.width / 2 - canvas.width / 2;
-    camera.x = Math.max(0, Math.min(camera.x, Math.max(0, level.width - canvas.width)));
-    camera.y = sonic.y + sonic.height / 2 - canvas.height / 2;
-    camera.y = Math.max(0, Math.min(camera.y, Math.max(0, level.height - canvas.height)));
+    
+    // Camera follows Sonic
+    camera.x = sonic.x - canvas.width / 2;
+    if (camera.x < 0) camera.x = 0;
     
     // Update badniks
     for (let badnik of badniks) {
@@ -697,9 +721,8 @@ function update() {
         
         levelEndSign.crossed = true;
         playLevelCompleteSound();
-
+        
         setTimeout(() => {
-            currentLevelIndex = (currentLevelIndex + 1) % LEVELS.length;
             initializeGame();
         }, 1500);
     }
@@ -773,15 +796,59 @@ function renderGame() {
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
     
-    // Draw level art — the same image the heightmap was measured from, at
-    // native resolution, so what's drawn and what Sonic collides with are
-    // always the same data.
-    const level = getCurrentLevel();
-    const levelImage = images[level.imageKey];
-    if (levelImage) {
-        ctx.drawImage(levelImage, 0, 0, level.width, level.height);
+    // Draw background
+    if (images.background) {
+        ctx.save();
+        ctx.translate(camera.x * 0.2, camera.y * 0.2);
+        
+        const bgWidth = 320;
+        const parallaxX = camera.x * 0.2;
+        const offsetX = -(parallaxX % bgWidth);
+        
+        const tilesNeeded = Math.ceil(LEVEL_WIDTH / bgWidth) + 2;
+        for (let i = 0; i < tilesNeeded; i++) {
+            ctx.drawImage(images.background, offsetX + i * bgWidth, 0, bgWidth, 240);
+        }
+        ctx.restore();
+    }
+    
+    // Draw terrain
+    const terrainWidth = 320;
+    const offsetX = -(camera.x % terrainWidth);
+    const terrainTilesNeeded = Math.ceil(LEVEL_WIDTH / terrainWidth) + 2;
+    
+    if (images.terrain1) {
+        for (let i = 0; i < terrainTilesNeeded; i++) {
+            ctx.drawImage(images.terrain1, offsetX + i * terrainWidth, 320, terrainWidth, 240);
+        }
+    }
+    
+    if (images.terrain2) {
+        for (let i = 0; i < terrainTilesNeeded; i++) {
+            const globalTileIndex = Math.floor(camera.x / terrainWidth) + i;
+
+            if (getGroundTileType(globalTileIndex) === 'cliff') {
+                ctx.save();
+                ctx.globalAlpha = 0.9;
+                ctx.drawImage(images.terrain2, offsetX + i * terrainWidth, 300, terrainWidth, 240);
+                ctx.restore();
+            }
+        }
     }
 
+    if (images.terrain3) {
+        for (let i = 0; i < terrainTilesNeeded; i++) {
+            const globalTileIndex = Math.floor(camera.x / terrainWidth) + i;
+
+            if (getGroundTileType(globalTileIndex) === 'hill') {
+                ctx.save();
+                ctx.globalAlpha = 0.85;
+                ctx.drawImage(images.terrain3, offsetX + i * terrainWidth, 310, terrainWidth, 240);
+                ctx.restore();
+            }
+        }
+    }
+    
     // Draw rings
     if (images.ring) {
         for (let ring of rings) {
