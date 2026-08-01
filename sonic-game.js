@@ -328,7 +328,6 @@ const TERMINAL_VELOCITY = 20;
 
 // Game objects
 let rings = [];
-let platforms = [];
 let badniks = [];
 let levelEndSign = null;
 
@@ -413,8 +412,6 @@ function initializeGame() {
             });
         }
     });
-    
-    platforms = [];
     
     // Create badniks
     badniks = [];
