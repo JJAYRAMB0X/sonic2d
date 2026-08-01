@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sonic the Hedgehog - Local Version</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 800px;
+            height: 600px;
+            border: 2px solid #4a9eff;
+            overflow: hidden;
+            background: #000;
+        }
+        
+        canvas {
+            display: block;
+            background: transparent;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: yellow;
+            font-weight: bold;
+            font-size: 18px;
+            text-shadow: 2px 2px 0px #000;
+            z-index: 100;
+        }
+        
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            font-size: 12px;
+            text-shadow: 1px 1px 0px #000;
+            z-index: 100;
+        }
+        
+        .game-title {
+            position: absolute;
+            top: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #4a9eff;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 0px #000;
+        }
+        
+        #loadingStatus {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+        }
+        
+        #instructions {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div class="game-title">SONIC THE HEDGEHOG</div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="ui">
+            <div>RINGS: <span id="ringCount">0</span></div>
+            <div>TIME: <span id="gameTime">0:00</span></div>
+        </div>
+        <div id="controls">
+            ARROW KEYS: Move | SPACEBAR: Jump | DOWN ARROW: Spin Dash
+        </div>
+        <div id="instructions">
+            Put your image files in an 'assets' folder:<br>
+            - LoadingScreen.png, Level-End-Sign1.png<br>
+            - background.png (your sky image)<br>
+            - terrain1.png, terrain2.png, terrain3.png<br>
+            - sonic_idle.png, sonic_run.png, Sonic-Spin.png<br>
+            - ring.png, sega.mp3
+        </div>
+        <div id="loadingStatus">Loading assets...</div>
+    </div>
+
+    <script src="sonic-game.js"></script>
+</body>
+</html>
