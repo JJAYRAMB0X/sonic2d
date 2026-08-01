@@ -608,8 +608,8 @@ function update() {
             sonic.y + sonic.height > platform.y &&
             sonic.y < platform.y + platform.height) {
             
-            if (sonic.velocityY >= 0 && 
-                sonic.y + sonic.height - sonic.velocityX <= platform.y + 4) {
+            if (sonic.velocityY >= 0 &&
+                sonic.y + sonic.height - sonic.velocityY <= platform.y + 4) {
                 sonic.y = platform.y - sonic.height;
                 sonic.velocityY = 0;
                 sonic.onGround = true;
