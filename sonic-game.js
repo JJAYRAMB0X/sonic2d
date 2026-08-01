@@ -336,22 +336,50 @@ let levelEndSign = null;
 const LEVEL_WIDTH = 4800;
 const LEVEL_END_X = LEVEL_WIDTH - 200;
 
-// GROUND DETECTION FUNCTION
-function getGroundLevel(sonicCenterX) {
-    const tileIndex = Math.floor(sonicCenterX / 320);
-    const positionInTile = sonicCenterX % 320;
-    const terrainType = tileIndex % 3;
-    
-    switch(terrainType) {
-        case 0: // T1 - flat
-            return 505;
-        case 1: // T2 - cliff 370→425
-            return 370 + (positionInTile / 320) * 55;
-        case 2: // T3 - hill 500→425  
-            return 500 - (positionInTile / 320) * 75;
-        default:
-            return 505;
+// GROUND HEIGHTMAP
+// Single source of truth for both ground collision and terrain art: a
+// continuous, piecewise-linear array of segments built from a repeating
+// flat/cliff/hill pattern. Each segment starts where the previous one ended,
+// so there are no height discontinuities at tile boundaries, and terrain
+// rendering below reads the same tile-type pattern used to build it.
+const GROUND_TILE_WIDTH = 320;
+const GROUND_PATTERN = ['flat', 'cliff', 'hill'];
+const GROUND_RISE = 80;
+
+function buildGroundSegments() {
+    const segments = [];
+    const tileCount = Math.ceil(LEVEL_WIDTH / GROUND_TILE_WIDTH) + 1;
+    let startY = 505;
+
+    for (let i = 0; i < tileCount; i++) {
+        const type = GROUND_PATTERN[i % GROUND_PATTERN.length];
+        const startX = i * GROUND_TILE_WIDTH;
+        const endX = startX + GROUND_TILE_WIDTH;
+        let endY = startY;
+        if (type === 'cliff') endY = startY - GROUND_RISE;
+        if (type === 'hill') endY = startY + GROUND_RISE;
+
+        segments.push({ startX, endX, startY, endY, type });
+        startY = endY;
     }
+    return segments;
+}
+
+const groundSegments = buildGroundSegments();
+
+function getGroundTileType(tileIndex) {
+    const patternLength = GROUND_PATTERN.length;
+    return GROUND_PATTERN[((tileIndex % patternLength) + patternLength) % patternLength];
+}
+
+function getGroundLevel(x) {
+    const clampedX = Math.min(Math.max(x, 0), LEVEL_WIDTH);
+    const segment = groundSegments[Math.min(
+        Math.floor(clampedX / GROUND_TILE_WIDTH),
+        groundSegments.length - 1
+    )];
+    const t = (clampedX - segment.startX) / (segment.endX - segment.startX);
+    return segment.startY + (segment.endY - segment.startY) * t;
 }
 
 // Initialize game world
@@ -553,26 +581,16 @@ function update() {
         }
     }
     
-    // CORRECTED GROUND DETECTION
+    // Ground detection — single velocity-guarded snap against the continuous heightmap
     sonic.onGround = false;
     const sonicCenterX = sonic.x + sonic.width / 2;
     const groundLevel = getGroundLevel(sonicCenterX);
 
-    // Ground collision
-    if (sonic.velocityY >= 0 && 
-        sonic.y + sonic.height >= groundLevel - 5 && 
-        sonic.y + sonic.height <= groundLevel + 10) {
+    if (sonic.velocityY >= 0 && sonic.y + sonic.height >= groundLevel) {
         sonic.y = groundLevel - sonic.height;
         sonic.velocityY = 0;
         sonic.onGround = true;
         sonic.canDoubleJump = false;
-    }
-
-    // Prevent falling through ground
-    if (sonic.y + sonic.height > groundLevel) {
-        sonic.y = groundLevel - sonic.height;
-        sonic.velocityY = 0;
-        sonic.onGround = true;
     }
     
     // Additional platform collision for scattered platforms
@@ -811,8 +829,8 @@ function renderGame() {
     if (images.terrain2) {
         for (let i = 0; i < terrainTilesNeeded; i++) {
             const globalTileIndex = Math.floor(camera.x / terrainWidth) + i;
-            
-            if (globalTileIndex % 3 === 1) {
+
+            if (getGroundTileType(globalTileIndex) === 'cliff') {
                 ctx.save();
                 ctx.globalAlpha = 0.9;
                 ctx.drawImage(images.terrain2, offsetX + i * terrainWidth, 300, terrainWidth, 240);
@@ -820,12 +838,12 @@ function renderGame() {
             }
         }
     }
-    
+
     if (images.terrain3) {
         for (let i = 0; i < terrainTilesNeeded; i++) {
             const globalTileIndex = Math.floor(camera.x / terrainWidth) + i;
-            
-            if (globalTileIndex % 4 === 2) {
+
+            if (getGroundTileType(globalTileIndex) === 'hill') {
                 ctx.save();
                 ctx.globalAlpha = 0.85;
                 ctx.drawImage(images.terrain3, offsetX + i * terrainWidth, 310, terrainWidth, 240);
