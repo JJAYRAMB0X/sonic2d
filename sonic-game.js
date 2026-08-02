@@ -104,7 +104,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 22;
+const totalAssets = 23;
 
 // Game states
 let currentGameState = 'loading';
@@ -261,6 +261,7 @@ const assetPaths = {
     sonicLaunching: 'FullAssets/Sonic-Poses/Sonic-Launching.png',
     sonicLanding: 'FullAssets/Sonic-Poses/Sonic-Landing.png',
     sonicBalancing: 'FullAssets/Sonic-Poses/Sonic-Balancing.png',
+    sonicCrouch: 'FullAssets/Sonic-Poses/Sonic-Crouch.png',
     ring: 'assets/Ring.png',
     spring: 'FullAssets/Accessories/Spring.png',
     plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
@@ -451,14 +452,16 @@ const POSE_SPRITES = {
     fall: 'sonicLanding',
     land: 'sonicLanding',
     balance: 'sonicBalancing',
+    crouch: 'sonicCrouch',
     run: 'sonicRun',
     idle: 'sonicIdle'
 };
 
-// Per-pose size trim, applied on top of the hitbox height. The sprawl reads far
-// bigger than the others at matched height, so it is drawn back a quarter.
+// Per-pose size trim, applied on top of the hitbox height. Some poses read far
+// bigger than the others at matched height and need pulling back.
 const POSE_SCALE = {
-    hurt: 0.75
+    hurt: 0.75,
+    spin: 0.8
 };
 
 const LANDING_HOLD = 9;     // frames the touchdown pose stays up
@@ -479,7 +482,7 @@ function isOnEdge() {
 }
 
 function choosePose() {
-    if (sonic.onLoop) return 'spin';            // curled up round the track
+    if (sonic.onLoop) return 'crouch';          // tucked low, riding the rail
     if (sonic.isHurt) return 'hurt';
     if (sonic.isSpinDashing || sonic.isRolling) return 'spin';
     if (!sonic.onGround) return sonic.velocityY < 0 ? 'launch' : 'fall';
@@ -654,13 +657,24 @@ function loopFromArt(segmentKey, centreX, centreY, radius) {
     };
 }
 
-// Centre sits 13px lower than the drawn hole's centre so the bottom of the ride
-// lands exactly on the floor, rather than making Sonic pop up on entry.
-const LOOPS = [loopFromArt('loop', 370, 216, 82)];
+// Fitted to the two parts of the drawing that can be measured cleanly: the
+// inner ceiling, whose highest point sits at image x 388 y 123, and the floor
+// at y 298. That puts the centre at (386, 210) with radius 88 — noticeably
+// right of the hole's apparent middle, which is why the rail lines up now.
+const LOOPS = [loopFromArt('loop', 386, 210, 88)];
 
 // Below this Sonic cannot hold the inside of the loop and simply runs past it.
 // A plain run (speed 6) just makes it; walking out of a spin dash flies round.
 const LOOP_MIN_SPEED = 5;
+
+// The rail is ridden faster than Sonic runs, so a lap is a quick whip round
+// rather than a slow crawl. He is released at the speed he arrived with, so the
+// boost does not leak into the rest of the level's pacing.
+const LOOP_RIDE_SPEED = [14, 28];       // min, max
+
+// A visible rail, drawn on the circle Sonic actually rides.
+const RAIL_THICKNESS = Math.round(worldSize(2.4) * 0.2);
+const RAIL_COLOR = '#39FF14';
 
 // The flat top of the loop block, which is solid but sits high above the ground
 // the heightmap describes — the second surface at the same x that the heightmap
@@ -711,7 +725,8 @@ function tryEnterLoop() {
             loop: loop,
             angle: Math.PI / 2,                 // the foot of the circle
             travelled: 0,
-            speed: speed,
+            speed: Math.min(Math.max(speed * 2, LOOP_RIDE_SPEED[0]), LOOP_RIDE_SPEED[1]),
+            exitSpeed: speed,
             direction: sonic.velocityX >= 0 ? 1 : -1
         };
         sonic.direction = sonic.onLoop.direction;
@@ -733,7 +748,7 @@ function updateLoopRide() {
     ride.travelled += step;
 
     if (ride.travelled >= Math.PI * 2) {
-        sonic.velocityX = ride.speed * ride.direction;
+        sonic.velocityX = ride.exitSpeed * ride.direction;
         sonic.velocityY = 0;
         sonic.spriteAngle = 0;
         sonic.loopBlocked = ride.loop;
@@ -742,9 +757,8 @@ function updateLoopRide() {
     }
 
     placeOnLoop();
-    sonic.velocityX = ride.speed * ride.direction;
+    sonic.velocityX = ride.exitSpeed * ride.direction;
     sonic.onGround = true;
-    sonic.spinAnimationFrame += 0.3;
 }
 
 // Shared by badniks and spikes so a hit costs the same either way.
@@ -1289,6 +1303,30 @@ function traceGroundPath() {
     ctx.lineTo(LEVEL_WIDTH, getGroundLevel(LEVEL_WIDTH));
 }
 
+// The rail Sonic actually rides, drawn on the very circle the ride uses — so
+// what you see is the track, not an illustration of it.
+function drawLoopRails() {
+    ctx.save();
+    ctx.lineCap = 'round';
+
+    for (const loop of LOOPS) {
+        if (loop.cx + loop.radius < camera.x || loop.cx - loop.radius > camera.x + canvas.width) continue;
+
+        ctx.strokeStyle = 'rgba(0, 60, 0, 0.55)';       // seat it against the art
+        ctx.lineWidth = RAIL_THICKNESS + 6;
+        ctx.beginPath();
+        ctx.arc(loop.cx, loop.cy, loop.radius, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = RAIL_COLOR;
+        ctx.lineWidth = RAIL_THICKNESS;
+        ctx.beginPath();
+        ctx.arc(loop.cx, loop.cy, loop.radius, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    ctx.restore();
+}
+
 // Stand-in terrain for a segment whose painting failed to load: the same
 // heightmap, filled in as a solid silhouette so the level is still playable.
 function drawSegmentSilhouette(segment) {
@@ -1371,6 +1409,7 @@ function renderGame() {
     }
     ctx.imageSmoothingEnabled = false;
 
+    drawLoopRails();
     drawSprings();
 
     // Hold G to see the collision surface drawn over the art it was read from.
