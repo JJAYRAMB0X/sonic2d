@@ -3,66 +3,88 @@ const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
 // ===========================================================================
-// LEVEL — FullAssets/Levels-Flattened-Layer/Level-.png
+// LEVEL — three paintings from FullAssets/Levels-Flattened-Layer/ chained into
+// one continuous side-scroller:
 //
-// The whole level is one 512x257 painting. Every fact about the ground comes
-// from that single image: the terrain is drawn straight from it, and
-// GROUND_HEIGHTMAP below was measured off its pixels — one row per image
-// column. Each column was scanned upward through the solid terrain mass and
-// the surface taken as the top of the grass band capping it; a grass band only
-// counts as ground when the dark soil layer sits underneath it, which is what
-// separates real terrain from the background ridge, palm trunks, bushes and
-// flowers that overhang it. Because collision and rendering read the same
-// image, what is drawn and what Sonic stands on cannot disagree.
+//   Level-.png                        grass ledges over water pits
+//   Level-3.png                       a long, gently rolling jungle run
+//   Level-With_Spikes-Springboard.png stepped blocks, waterfall, high towers
 //
-// The art is 512x257 while the canvas is 800x600, so both the image and the
-// heightmap are scaled by LEVEL_SCALE, which fills the canvas vertically.
-// Heightmap values stay in image rows; getGroundLevel() applies the scale, so
-// there is exactly one conversion and the art can never drift from collision.
+// Every fact about the ground comes from those images. The terrain is drawn
+// from them directly, and LEVEL_HEIGHTMAPS (level-heightmaps.js) was measured
+// off their pixels — one row per image column. Because collision and rendering
+// read the same picture through the same scale, what is drawn and what Sonic
+// stands on cannot disagree.
+//
+// The three were drawn at very different resolutions (512x257 up to 1808x1288),
+// so a shared scale would make Sonic a giant in one segment and an ant in the
+// next. Each is instead scaled by its own measured grass-band thickness, so one
+// band is LEVEL_TILE tall everywhere and terrain reads at a consistent size.
+//
+// Segments are then laid end to end, and each is nudged vertically so the ground
+// where it starts meets the ground where the previous one ended. The joins come
+// out seamless: 471 -> 471 and 441 -> 441 world pixels.
 // ===========================================================================
-const LEVEL_IMAGE_WIDTH = 512;
-const LEVEL_IMAGE_HEIGHT = 257;
-const LEVEL_SCALE = canvas.height / LEVEL_IMAGE_HEIGHT;   // 600 / 257 ≈ 2.335
-const LEVEL_WIDTH = LEVEL_IMAGE_WIDTH * LEVEL_SCALE;      // ≈ 1195 world px
-const LEVEL_HEIGHT = canvas.height;
+const LEVEL_TILE = 40;              // world pixels per source grass band
+const LEVEL_ASSET_DIR = 'FullAssets/Levels-Flattened-Layer/';
 
-// Ground surface in image rows, one entry per image column (measured, not generated).
-const GROUND_HEIGHTMAP = [
-    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
-    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
-    129,129,129,129,129,129,129,129,129,129,129,129,129,130,131,133,191,191,192,192,192,192,192,192,192,192,192,192,192,192,193,193,
-    194,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,
-    197,198,198,198,198,198,198,198,198,198,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,
-    199,199,199,199,199,199,198,198,198,198,198,198,198,198,198,197,197,197,197,197,197,197,197,197,197,197,197,197,197,196,196,196,
-    195,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,
-    194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,193,193,193,193,193,193,193,193,193,193,193,193,
-    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
-    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
-    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
-    128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
-    128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
-    191,191,192,192,192,192,192,192,192,192,192,192,192,192,193,193,194,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,
-    196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,197,198,198,198,198,198,198,198,198,198,199,199,199,199,199,199,
-    199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,200
+const LEVEL_SEGMENTS = [
+    { key: 'levelA', file: 'Level-.png',                        imageWidth: 512,  imageHeight: 257,  band: 17 },
+    { key: 'level3', file: 'Level-3.png',                       imageWidth: 1808, imageHeight: 1288, band: 93 },
+    { key: 'spikes', file: 'Level-With_Spikes-Springboard.png', imageWidth: 875,  imageHeight: 428,  band: 31 }
 ];
+
+// Lay the segments out: scale each by its own grass band, place it after the
+// previous one, and shift it vertically so the ground flows across the seam.
+function buildLevel() {
+    let x = 0;
+    let previousGroundY = null;
+
+    for (const segment of LEVEL_SEGMENTS) {
+        segment.heightmap = LEVEL_HEIGHTMAPS[segment.key];
+        segment.scale = LEVEL_TILE / segment.band;
+        segment.width = segment.imageWidth * segment.scale;
+        segment.height = segment.imageHeight * segment.scale;
+        segment.x = x;
+        segment.y = previousGroundY === null
+            ? 0
+            : previousGroundY - segment.heightmap[0] * segment.scale;
+
+        previousGroundY = segment.y + segment.heightmap[segment.heightmap.length - 1] * segment.scale;
+        x += segment.width;
+    }
+    return x;
+}
+
+const LEVEL_WIDTH = buildLevel();
+const LEVEL_BOTTOM = Math.max(...LEVEL_SEGMENTS.map(s => s.y + s.height));
+
+function segmentAt(worldX) {
+    for (let i = LEVEL_SEGMENTS.length - 1; i > 0; i--) {
+        if (worldX >= LEVEL_SEGMENTS[i].x) return LEVEL_SEGMENTS[i];
+    }
+    return LEVEL_SEGMENTS[0];
+}
 
 // The one place image rows become world pixels. Linear interpolation between
 // adjacent columns keeps the surface continuous instead of stair-stepping.
 function getGroundLevel(worldX) {
-    const column = Math.min(Math.max(worldX / LEVEL_SCALE, 0), LEVEL_IMAGE_WIDTH - 1);
+    const segment = segmentAt(worldX);
+    const map = segment.heightmap;
+    const column = Math.min(Math.max((worldX - segment.x) / segment.scale, 0), map.length - 1);
     const index = Math.floor(column);
-    const next = Math.min(index + 1, LEVEL_IMAGE_WIDTH - 1);
+    const next = Math.min(index + 1, map.length - 1);
     const t = column - index;
-    return (GROUND_HEIGHTMAP[index] + (GROUND_HEIGHTMAP[next] - GROUND_HEIGHTMAP[index]) * t) * LEVEL_SCALE;
+    return (map[index] + (map[next] - map[index]) * t) * segment.scale + segment.y;
 }
 
-// Sprites are authored against the same 512x257 art, so they scale with it.
-const spriteSize = (imagePixels) => Math.round(imagePixels * LEVEL_SCALE);
+// Sprites are sized in tiles so they match the terrain in every segment.
+const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 13;
+const totalAssets = 15;
 
 // Game states
 let currentGameState = 'loading';
@@ -192,9 +214,6 @@ let gameData = {
 
 // Asset file paths
 const assetPaths = {
-    // The flattened level painting replaces the old tiled background/terrain art:
-    // it is both the terrain graphic and the source of GROUND_HEIGHTMAP.
-    level: 'FullAssets/Levels-Flattened-Layer/Level-.png',
     sonicIdle: 'assets/sonic_idle.png',
     sonicRun: 'assets/sonic_run.png',
     sonicSpin: 'assets/Sonic-Spin.png',
@@ -208,6 +227,12 @@ const assetPaths = {
     badnik2_frame2: 'assets/badnik2_frame2.png',
     segaAudio: 'assets/sega.mp3'
 };
+
+// The level paintings are both the terrain graphics and the source of the
+// heightmaps, so they load under the same keys their segments are named by.
+for (const segment of LEVEL_SEGMENTS) {
+    assetPaths[segment.key] = LEVEL_ASSET_DIR + segment.file;
+}
 
 // Load all assets
 function loadAssets() {
@@ -352,8 +377,8 @@ document.addEventListener('keyup', (e) => {
 let sonic = {
     x: 80,
     y: 0,
-    width: spriteSize(40),
-    height: spriteSize(40),
+    width: worldSize(2.4),
+    height: worldSize(2.4),
     velocityX: 0,
     velocityY: 0,
     speed: 6,
@@ -377,9 +402,10 @@ let sonic = {
     invulnerabilityTime: 120
 };
 
-// Physics constants, sized for a world scaled up by LEVEL_SCALE. A jump rises
-// jumpPower^2 / (2 * GRAVITY) ≈ 220px, comfortably more than the ≈163px climb
-// from the water pits back up onto the grass ledges.
+// Physics constants, sized for a world where one tile is LEVEL_TILE. A jump
+// rises jumpPower^2 / (2 * GRAVITY) ≈ 220px, which clears every climb on the
+// route: the ≈163px out of the water pits and the ≈122px block steps later on.
+// The only rise taller than that is the tower past the goal.
 const GRAVITY = 1.0;
 const FRICTION = 0.85;
 const TERMINAL_VELOCITY = 28;
@@ -392,51 +418,51 @@ let rings = [];
 let badniks = [];
 let levelEndSign = null;
 
-const LEVEL_END_X = LEVEL_WIDTH - spriteSize(70);
+// The goal sits on the low ground just before the final tower, which is a 406px
+// rise — taller than a jump. Reaching its top is an optional double-jump stunt,
+// never something the player has to do to finish.
+const LEVEL_END_X = 2900;
 
 // Initialize game world
 function initializeGame() {
     console.log('Initializing game...');
     
-    // Rings ride the measured ground so they hug whatever the art actually does,
-    // instead of hanging at coordinates tuned to a level that no longer exists.
-    const ringSize = spriteSize(16);
+    // Rings ride the measured ground, so they hug whatever the art actually does
+    // across all three segments instead of hanging at hand-tuned coordinates.
+    const ringSize = worldSize(1);
     rings = [];
-    for (let x = 150; x < LEVEL_END_X - 60; x += 46) {
-        const bob = Math.sin(x / 90) * 30;
-        rings.push({
-            x: x,
-            y: getGroundLevel(x + ringSize / 2) - ringSize - 45 - bob,
-            size: ringSize,
-            collected: false,
-            animationFrame: (x / 46) % Math.PI
-        });
+    const addRing = (x, y, phase) => rings.push({
+        x: x, y: y, size: ringSize, collected: false, animationFrame: phase
+    });
+
+    for (let x = 150; x < LEVEL_END_X - 60; x += 55) {
+        const bob = Math.sin(x / 110) * 30;
+        addRing(x, getGroundLevel(x + ringSize / 2) - ringSize - 45 - bob, (x / 55) % Math.PI);
     }
 
-    // Arcs of rings tempting a jump across each water pit.
-    [{ start: 200, end: 560 }, { start: 1000, end: 1160 }].forEach(gap => {
+    // Arcs tempting a jump over the water pits, the jungle dip and the climb up
+    // into the block towers.
+    [
+        { start: 200, end: 560 }, { start: 1000, end: 1160 },
+        { start: 1450, end: 1750 }, { start: 2180, end: 2420 },
+        { start: 2620, end: 2800 }
+    ].forEach(gap => {
         const span = gap.end - gap.start;
         for (let i = 0; i <= 6; i++) {
             const t = i / 6;
             const x = gap.start + span * t;
-            rings.push({
-                x: x,
-                y: getGroundLevel(x + ringSize / 2) - ringSize - 60 - Math.sin(t * Math.PI) * 150,
-                size: ringSize,
-                collected: false,
-                animationFrame: i * 0.4
-            });
+            addRing(x, getGroundLevel(x + ringSize / 2) - ringSize - 60 - Math.sin(t * Math.PI) * 150, i * 0.4);
         }
     });
 
     // Badniks patrol the ledges and pit floors; their y is re-read from the
     // heightmap every frame in update(), so they walk on the drawn ground too.
-    const badnikSize = spriteSize(24);
+    const badnikSize = worldSize(1.5);
     badniks = [];
     [
-        { x: 300, type: 1 }, { x: 460, type: 2 },
-        { x: 700, type: 1 }, { x: 880, type: 2 },
-        { x: 1000, type: 1 }
+        { x: 300, type: 1 }, { x: 460, type: 2 }, { x: 800, type: 1 },
+        { x: 1350, type: 2 }, { x: 1650, type: 1 }, { x: 1900, type: 2 },
+        { x: 2150, type: 1 }, { x: 2320, type: 2 }, { x: 2850, type: 1 }
     ].forEach(pos => {
         badniks.push({
             x: pos.x,
@@ -456,8 +482,8 @@ function initializeGame() {
     });
 
     // Create level end sign
-    const signWidth = spriteSize(40);
-    const signHeight = spriteSize(56);
+    const signWidth = worldSize(2.5);
+    const signHeight = worldSize(3.5);
     levelEndSign = {
         x: LEVEL_END_X,
         y: getGroundLevel(LEVEL_END_X + signWidth / 2) - signHeight,
@@ -623,7 +649,7 @@ function update() {
     }
 
     // Reset if Sonic somehow ends up below the level
-    if (sonic.y > LEVEL_HEIGHT + 100) {
+    if (sonic.y > LEVEL_BOTTOM + 100) {
         sonic.x = 80;
         sonic.y = getGroundLevel(sonic.x + sonic.width / 2) - sonic.height;
         sonic.velocityX = 0;
@@ -633,9 +659,12 @@ function update() {
         sonic.spinDashCharge = 0;
     }
 
-    // Camera follows Sonic, clamped to the level the art actually covers. The
-    // level is exactly one canvas tall, so it never scrolls vertically.
+    // Camera follows Sonic, clamped to what the paintings actually cover. The
+    // chained level is only a little taller than the canvas, so the vertical
+    // follow is a slight drift rather than real vertical scrolling.
     camera.x = Math.min(Math.max(sonic.x - canvas.width / 2, 0), Math.max(0, LEVEL_WIDTH - canvas.width));
+    camera.y = Math.min(Math.max(sonic.y + sonic.height / 2 - canvas.height / 2, 0),
+                        Math.max(0, LEVEL_BOTTOM - canvas.height));
 
     // Badniks walk the same measured surface, and turn at cliffs rather than
     // strolling off into the water.
@@ -799,26 +828,36 @@ function renderIntro() {
     ctx.fillText('Press ENTER to Start', canvas.width / 2, canvas.height - 50);
 }
 
-// Traces the collision surface along the top of the terrain. Used as the
-// fallback terrain fill when the level art fails to load, and — with G held —
-// as an overlay for checking that the surface follows the drawn ground.
+const SKY_COLOR = '#1810bb';       // sampled from the paintings
+const UNDERGROUND_COLOR = '#7a3405';
+
+// Traces the collision surface across every segment, for the G overlay.
 function traceGroundPath() {
     ctx.beginPath();
-    ctx.moveTo(0, GROUND_HEIGHTMAP[0] * LEVEL_SCALE);
-    for (let column = 1; column < LEVEL_IMAGE_WIDTH; column++) {
-        ctx.lineTo(column * LEVEL_SCALE, GROUND_HEIGHTMAP[column] * LEVEL_SCALE);
+    let started = false;
+    for (const segment of LEVEL_SEGMENTS) {
+        const map = segment.heightmap;
+        for (let column = 0; column < map.length; column++) {
+            const x = segment.x + column * segment.scale;
+            const y = map[column] * segment.scale + segment.y;
+            if (started) ctx.lineTo(x, y); else { ctx.moveTo(x, y); started = true; }
+        }
     }
-    ctx.lineTo(LEVEL_WIDTH, GROUND_HEIGHTMAP[LEVEL_IMAGE_WIDTH - 1] * LEVEL_SCALE);
+    ctx.lineTo(LEVEL_WIDTH, getGroundLevel(LEVEL_WIDTH));
 }
 
-function drawHeightmapSilhouette() {
-    ctx.fillStyle = '#2401b7';
-    ctx.fillRect(0, 0, LEVEL_WIDTH, LEVEL_HEIGHT);
-
+// Stand-in terrain for a segment whose painting failed to load: the same
+// heightmap, filled in as a solid silhouette so the level is still playable.
+function drawSegmentSilhouette(segment) {
+    const map = segment.heightmap;
     ctx.fillStyle = '#3d9b00';
-    traceGroundPath();
-    ctx.lineTo(LEVEL_WIDTH, LEVEL_HEIGHT);
-    ctx.lineTo(0, LEVEL_HEIGHT);
+    ctx.beginPath();
+    ctx.moveTo(segment.x, map[0] * segment.scale + segment.y);
+    for (let column = 1; column < map.length; column++) {
+        ctx.lineTo(segment.x + column * segment.scale, map[column] * segment.scale + segment.y);
+    }
+    ctx.lineTo(segment.x + segment.width, LEVEL_BOTTOM);
+    ctx.lineTo(segment.x, LEVEL_BOTTOM);
     ctx.closePath();
     ctx.fill();
 }
@@ -833,21 +872,38 @@ function drawGroundLine() {
 }
 
 function renderGame() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = SKY_COLOR;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
 
-    // Terrain. The level art is drawn once, whole, scaled by exactly the same
-    // LEVEL_SCALE that getGroundLevel() applies to the heightmap read off it —
-    // so the ground Sonic collides with is the ground on screen.
-    if (images.level) {
-        ctx.drawImage(images.level, 0, 0, LEVEL_WIDTH, LEVEL_HEIGHT);
-    } else {
-        drawHeightmapSilhouette();
+    // Terrain. Each painting is drawn whole at its own placement and scale — the
+    // very same scale getGroundLevel() applies to the heightmap read off it — so
+    // the ground Sonic collides with is the ground on screen. Segments are not
+    // all the same height, so each gets a skirt of dirt below it to cover the
+    // gap rather than showing sky under the ground.
+    for (const segment of LEVEL_SEGMENTS) {
+        if (segment.x + segment.width < camera.x || segment.x > camera.x + canvas.width) continue;
+
+        const bottom = segment.y + segment.height;
+        if (bottom < LEVEL_BOTTOM) {
+            ctx.fillStyle = UNDERGROUND_COLOR;
+            ctx.fillRect(segment.x, bottom, segment.width, LEVEL_BOTTOM - bottom);
+        }
+
+        const art = images[segment.key];
+        if (art) {
+            // Level-3 is a high-resolution painting being scaled down, where
+            // nearest-neighbour just throws pixels away; the other two are chunky
+            // pixel art being scaled up, where smoothing would blur them.
+            ctx.imageSmoothingEnabled = segment.scale < 1;
+            ctx.drawImage(art, segment.x, segment.y, segment.width, segment.height);
+        } else {
+            drawSegmentSilhouette(segment);
+        }
     }
+    ctx.imageSmoothingEnabled = false;
 
     // Hold G to see the collision surface drawn over the art it was read from.
     if (keys['KeyG']) {
