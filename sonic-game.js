@@ -84,7 +84,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 15;
+const totalAssets = 16;
 
 // Game states
 let currentGameState = 'loading';
@@ -184,6 +184,12 @@ function playBadnikDestroySound() {
     setTimeout(() => playSound(200, 0.15, 'sawtooth', 0.1), 50);
 }
 
+function playSpringSound() {
+    playSound(784, 0.06, 'square', 0.18);
+    setTimeout(() => playSound(1175, 0.06, 'square', 0.15), 30);
+    setTimeout(() => playSound(1568, 0.14, 'square', 0.12), 60);
+}
+
 function playSonicHurtSound() {
     playSound(523, 0.08, 'square', 0.2);
     setTimeout(() => playSound(466, 0.08, 'square', 0.18), 50);
@@ -212,13 +218,28 @@ let gameData = {
     gameStartTime: Date.now()
 };
 
+// Gameplay music. Deliberately outside the asset counter: nothing waits on it,
+// and it only starts once the player leaves the title screen — which is also
+// the key press browsers require before they will let audio play at all.
+const music = new Audio('FullAssets/sonic1.MP3');
+music.loop = true;
+music.volume = 0.35;
+music.preload = 'auto';
+
+function startMusic() {
+    if (sounds.segaAudio) sounds.segaAudio.pause();   // don't talk over the jingle's tail
+    music.currentTime = 0;
+    music.play().catch(err => console.log('Music blocked until interaction:', err));
+}
+
 // Asset file paths
 const assetPaths = {
     sonicIdle: 'assets/sonic_idle.png',
     sonicRun: 'assets/sonic_run.png',
     sonicSpin: 'assets/Sonic-Spin.png',
     sonicColliding: 'assets/Sonic-Colliding.png',
-    ring: 'assets/ring.png',
+    ring: 'assets/Ring.png',
+    spring: 'FullAssets/Accessories/Spring.png',
     loadingScreen: 'assets/LoadingScreen.png',
     levelEndSign: 'assets/Level-End-Sign1.png',
     badnik1_frame1: 'assets/badnik1_frame1.png',
@@ -399,7 +420,8 @@ let sonic = {
     jumpKeyPressed: false,
     isHurt: false,
     hurtTimer: 0,
-    invulnerabilityTime: 120
+    invulnerabilityTime: 120,
+    launchTimer: 0
 };
 
 // Physics constants, sized for a world where one tile is LEVEL_TILE. A jump
@@ -422,6 +444,78 @@ let levelEndSign = null;
 // rise — taller than a jump. Reaching its top is an optional double-jump stunt,
 // never something the player has to do to finish.
 const LEVEL_END_X = 2900;
+
+// Things painted into the level art get their boxes in the image pixels of the
+// segment they belong to, converted through that segment's own scale — the same
+// one the terrain is drawn with. Measured off the art, they stay pinned to it.
+function fromArt(segmentKey, imageX, imageY, imageWidth, imageHeight) {
+    const segment = LEVEL_SEGMENTS.find(s => s.key === segmentKey);
+    return {
+        x: segment.x + imageX * segment.scale,
+        y: segment.y + imageY * segment.scale,
+        width: imageWidth * segment.scale,
+        height: imageHeight * segment.scale
+    };
+}
+
+// The row of spikes at the foot of the waterfall in Level-With_Spikes-Springboard.png.
+// Spikes hurt however you touch them — rolling through does not save you.
+const HAZARDS = [
+    fromArt('spikes', 197, 322, 88, 34)
+];
+
+// The red springboard painted into that same level points up and to the right,
+// so it throws Sonic forward as well as upward. The second spring is one we add
+// ourselves, drawn with Accessories/Spring.png, offering a way over the spikes.
+const SPRING_SPRITE_SIZE = { width: worldSize(1.4), height: worldSize(0.8) };
+
+// Launch strength is capped by headroom, not taste: the springboard's deck sits
+// at world y 312 and the world ends at 0, so 20 puts the apex at y 16 — right
+// under the top of the view, which is as high as Sonic can go and stay on screen.
+const SPRINGS = [
+    Object.assign(fromArt('spikes', 598, 176, 61, 19), { launch: 20, push: 14 }),
+    {
+        // On the ledge above the spike pit, far enough back that the whole
+        // footprint is on flat ground. It is angled forward on purpose: a purely
+        // vertical bounce would drop a slow-moving Sonic straight into the
+        // spikes, whereas the push makes the arc clear them whatever speed he
+        // arrives at.
+        x: 2130,
+        y: 0,                                   // dropped onto the ground below
+        width: SPRING_SPRITE_SIZE.width,
+        height: SPRING_SPRITE_SIZE.height,
+        launch: 20,
+        push: 8,
+        sprite: 'spring'
+    }
+];
+
+for (const spring of SPRINGS) {
+    if (spring.sprite) spring.y = getGroundLevel(spring.x + spring.width / 2) - spring.height;
+}
+
+const overlaps = (a, b) =>
+    a.x < b.x + b.width && a.x + a.width > b.x &&
+    a.y < b.y + b.height && a.y + a.height > b.y;
+
+// Shared by badniks and spikes so a hit costs the same either way.
+function hurtSonic(knockbackDirection) {
+    console.log('Sonic hurt!');
+
+    if (gameData.rings > 0) {
+        gameData.rings = Math.max(0, gameData.rings - 10);
+        playRingScatterSound();
+    }
+
+    sonic.isHurt = true;
+    sonic.hurtTimer = sonic.invulnerabilityTime;
+    sonic.isSpinDashing = false;
+    sonic.isRolling = false;
+    sonic.velocityX = knockbackDirection * 8;
+    sonic.velocityY = -6;
+
+    playSonicHurtSound();
+}
 
 // Initialize game world
 function initializeGame() {
@@ -504,11 +598,14 @@ function initializeGame() {
     sonic.lastJumpTime = 0;
     sonic.isHurt = false;
     sonic.hurtTimer = 0;
+    sonic.launchTimer = 0;
     
     // Reset game state
     gameData.rings = 0;
     gameData.time = 0;
     gameData.gameStartTime = Date.now();
+
+    startMusic();
     
     console.log('Game initialized with', rings.length, 'rings and', badniks.length, 'badniks!');
 }
@@ -545,17 +642,22 @@ function update() {
             sonic.isRolling = false;
         }
         
+        // A spring launch owns Sonic's horizontal speed for a moment. Without
+        // this, holding a direction key would overwrite the push on the very
+        // next frame and the arc would collapse back to running pace.
+        const steerable = !sonic.isRolling && sonic.launchTimer <= 0;
+
         if (keys['ArrowLeft'] || keys['KeyA']) {
-            if (!sonic.isRolling) {
+            if (steerable) {
                 sonic.velocityX = -sonic.speed;
                 sonic.direction = -1;
             }
         } else if (keys['ArrowRight'] || keys['KeyD']) {
-            if (!sonic.isRolling) {
+            if (steerable) {
                 sonic.velocityX = sonic.speed;
                 sonic.direction = 1;
             }
-        } else if (!sonic.isRolling) {
+        } else if (steerable) {
             sonic.velocityX *= FRICTION;
         }
         
@@ -635,6 +737,8 @@ function update() {
         }
     }
 
+    if (sonic.launchTimer > 0) sonic.launchTimer--;
+
     // Ground detection — one velocity-guarded snap onto the measured surface.
     // This is the only ground collision in the game; there are no separate
     // platforms that could sit somewhere the level art does not show.
@@ -648,6 +752,38 @@ function update() {
         sonic.canDoubleJump = false;
     }
 
+    // Springs. Checked after the ground snap so landing on one overrides the
+    // landing: come down on it and you go straight back up, harder than a jump.
+    for (const spring of SPRINGS) {
+        if (sonic.velocityY >= 0 && overlaps(sonic, spring)) {
+            sonic.y = spring.y - sonic.height;
+            sonic.velocityY = -spring.launch;
+            sonic.onGround = false;
+            sonic.canDoubleJump = false;
+            sonic.isSpinDashing = false;
+            sonic.spinDashCharge = 0;
+
+            if (spring.push) {
+                sonic.velocityX = spring.push;      // both springs throw Sonic to the right
+                sonic.direction = 1;
+                sonic.isRolling = false;
+                sonic.launchTimer = 20;
+            }
+
+            playSpringSound();
+        }
+    }
+
+    // Spikes. Unlike badniks these cannot be beaten by rolling into them.
+    if (!sonic.isHurt) {
+        for (const hazard of HAZARDS) {
+            if (overlaps(sonic, hazard)) {
+                hurtSonic(sonic.x + sonic.width / 2 < hazard.x + hazard.width / 2 ? -1 : 1);
+                break;
+            }
+        }
+    }
+
     // Reset if Sonic somehow ends up below the level
     if (sonic.y > LEVEL_BOTTOM + 100) {
         sonic.x = 80;
@@ -657,6 +793,7 @@ function update() {
         sonic.isSpinDashing = false;
         sonic.isRolling = false;
         sonic.spinDashCharge = 0;
+        sonic.launchTimer = 0;
     }
 
     // Camera follows Sonic, clamped to what the paintings actually cover. The
@@ -712,21 +849,7 @@ function update() {
                             sonic.velocityY = -12;
                         }
                     } else {
-                        console.log('Sonic hurt!');
-                        
-                        if (gameData.rings > 0) {
-                            gameData.rings = Math.max(0, gameData.rings - 10);
-                            playRingScatterSound();
-                        }
-                        
-                        sonic.isHurt = true;
-                        sonic.hurtTimer = sonic.invulnerabilityTime;
-                        
-                        const knockbackDirection = sonic.x < badnik.x ? -1 : 1;
-                        sonic.velocityX = knockbackDirection * 8;
-                        sonic.velocityY = -6;
-                        
-                        playSonicHurtSound();
+                        hurtSonic(sonic.x < badnik.x ? -1 : 1);
                     }
                 }
             }
@@ -750,13 +873,11 @@ function update() {
         }
     }
     
-    // Check level end sign
+    // Check level end sign. Passing the post is what counts, at any height —
+    // otherwise a springboard flight sails straight over the goal.
     if (levelEndSign && !levelEndSign.crossed &&
-        sonic.x + sonic.width > levelEndSign.x &&
-        sonic.x < levelEndSign.x + levelEndSign.width &&
-        sonic.y + sonic.height > levelEndSign.y &&
-        sonic.y < levelEndSign.y + levelEndSign.height) {
-        
+        sonic.x + sonic.width / 2 > levelEndSign.x + levelEndSign.width / 2) {
+
         levelEndSign.crossed = true;
         playLevelCompleteSound();
         
@@ -868,7 +989,30 @@ function drawGroundLine() {
     ctx.lineWidth = 3;
     traceGroundPath();
     ctx.stroke();
+
+    // Boxes for the things measured off the art, so their fit can be checked
+    // against what is painted underneath them.
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#FF2222';
+    for (const hazard of HAZARDS) ctx.strokeRect(hazard.x, hazard.y, hazard.width, hazard.height);
+    ctx.strokeStyle = '#22FF88';
+    for (const spring of SPRINGS) ctx.strokeRect(spring.x, spring.y, spring.width, spring.height);
     ctx.restore();
+}
+
+// Only the spring we add needs drawing; the springboard is already painted into
+// Level-With_Spikes-Springboard.png.
+function drawSprings() {
+    for (const spring of SPRINGS) {
+        if (!spring.sprite) continue;
+        const art = images[spring.sprite];
+        if (art) {
+            ctx.drawImage(art, spring.x, spring.y, spring.width, spring.height);
+        } else {
+            ctx.fillStyle = '#e02020';
+            ctx.fillRect(spring.x, spring.y, spring.width, spring.height);
+        }
+    }
 }
 
 function renderGame() {
@@ -904,6 +1048,8 @@ function renderGame() {
         }
     }
     ctx.imageSmoothingEnabled = false;
+
+    drawSprings();
 
     // Hold G to see the collision surface drawn over the art it was read from.
     if (keys['KeyG']) {
