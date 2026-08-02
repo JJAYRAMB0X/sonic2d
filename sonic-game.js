@@ -84,7 +84,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 17;
+const totalAssets = 19;
 
 // Game states
 let currentGameState = 'loading';
@@ -238,6 +238,8 @@ const assetPaths = {
     sonicRun: 'assets/sonic_run.png',
     sonicSpin: 'assets/Sonic-Spin.png',
     sonicColliding: 'assets/Sonic-Colliding.png',
+    sonicLaunching: 'FullAssets/Sonic-Poses/Sonic-Launching.png',
+    sonicLanding: 'FullAssets/Sonic-Poses/Sonic-Landing.png',
     ring: 'assets/Ring.png',
     spring: 'FullAssets/Accessories/Spring.png',
     plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
@@ -426,8 +428,32 @@ let sonic = {
     isHurt: false,
     hurtTimer: 0,
     invulnerabilityTime: 120,
-    launchTimer: 0
+    launchTimer: 0,
+    landTimer: 0,
+    pose: 'idle'
 };
+
+// Which sprite each pose draws with. Rising and falling get their own poses, so
+// a jump reads as launch -> descend -> touchdown instead of running in mid-air.
+const POSE_SPRITES = {
+    hurt: 'sonicColliding',
+    spin: 'sonicSpin',
+    launch: 'sonicLaunching',
+    fall: 'sonicLanding',
+    land: 'sonicLanding',
+    run: 'sonicRun',
+    idle: 'sonicIdle'
+};
+
+const LANDING_HOLD = 9;     // frames the touchdown pose stays up
+
+function choosePose() {
+    if (sonic.isHurt) return 'hurt';
+    if (sonic.isSpinDashing || sonic.isRolling) return 'spin';
+    if (!sonic.onGround) return sonic.velocityY < 0 ? 'launch' : 'fall';
+    if (sonic.landTimer > 0) return 'land';
+    return sonic.animationFrame === 1 ? 'run' : 'idle';
+}
 
 // Physics constants, sized for a world where one tile is LEVEL_TILE. A jump
 // rises jumpPower^2 / (2 * GRAVITY) ≈ 220px, which clears every climb on the
@@ -670,7 +696,9 @@ function initializeGame() {
     sonic.isHurt = false;
     sonic.hurtTimer = 0;
     sonic.launchTimer = 0;
-    
+    sonic.landTimer = 0;
+    sonic.pose = 'idle';
+
     // Reset game state
     gameData.rings = 0;
     gameData.time = 0;
@@ -810,10 +838,12 @@ function updateOnFoot() {
     }
 
     if (sonic.launchTimer > 0) sonic.launchTimer--;
+    if (sonic.landTimer > 0) sonic.landTimer--;
 
     // Ground detection — one velocity-guarded snap onto the measured surface.
     // This is the only ground collision in the game; there are no separate
     // platforms that could sit somewhere the level art does not show.
+    const wasOnGround = sonic.onGround;
     sonic.onGround = false;
     const groundLevel = getGroundLevel(sonic.x + sonic.width / 2);
 
@@ -822,6 +852,10 @@ function updateOnFoot() {
         sonic.velocityY = 0;
         sonic.onGround = true;
         sonic.canDoubleJump = false;
+
+        // Only the moment of touchdown starts the landing pose, not every frame
+        // spent standing still on the ground.
+        if (!wasOnGround) sonic.landTimer = LANDING_HOLD;
     }
 
     // Springs. Checked after the ground snap so landing on one overrides the
@@ -984,7 +1018,9 @@ function update() {
     } else {
         sonic.animationFrame = 0;
     }
-    
+
+    if (!planeMode) sonic.pose = choosePose();
+
     // Update game timer
     gameData.time = Math.floor((Date.now() - gameData.gameStartTime) / 1000);
 }
@@ -1215,19 +1251,16 @@ function renderGame() {
 }
 
 function drawSonic() {
-    let sonicSprite;
+    const sprite = images[POSE_SPRITES[sonic.pose] || 'sonicIdle'] || images.sonicIdle;
+    if (!sprite) return;
 
-    if (sonic.isHurt) {
-        sonicSprite = images.sonicColliding;
-    } else if (sonic.animationFrame === 2) {
-        sonicSprite = images.sonicSpin;
-    } else if (sonic.animationFrame === 0) {
-        sonicSprite = images.sonicIdle;
-    } else {
-        sonicSprite = images.sonicRun;
-    }
-
-    if (!sonicSprite) return;
+    // The poses are drawn at wildly different aspects (0.63 for the launch,
+    // 1.42 for the sprawl), so match the hitbox height and let the width follow
+    // the art. Squeezing them all into a square box distorts every one of them.
+    const drawHeight = sonic.height;
+    const drawWidth = sprite.naturalHeight
+        ? drawHeight * (sprite.naturalWidth / sprite.naturalHeight)
+        : sonic.width;
 
     ctx.save();
     ctx.translate(sonic.x + sonic.width / 2, sonic.y + sonic.height / 2);
@@ -1243,11 +1276,11 @@ function drawSonic() {
         ctx.scale(-1, 1);
     }
 
-    if (sonic.animationFrame === 2 && !sonic.isHurt) {
+    if (sonic.pose === 'spin') {
         ctx.rotate(sonic.spinAnimationFrame);
     }
 
-    ctx.drawImage(sonicSprite, -sonic.width / 2, -sonic.height / 2, sonic.width, sonic.height);
+    ctx.drawImage(sprite, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
     ctx.restore();
 }
 
