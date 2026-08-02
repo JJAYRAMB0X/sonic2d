@@ -84,7 +84,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 19;
+const totalAssets = 20;
 
 // Game states
 let currentGameState = 'loading';
@@ -240,6 +240,7 @@ const assetPaths = {
     sonicColliding: 'assets/Sonic-Colliding.png',
     sonicLaunching: 'FullAssets/Sonic-Poses/Sonic-Launching.png',
     sonicLanding: 'FullAssets/Sonic-Poses/Sonic-Landing.png',
+    sonicBalancing: 'FullAssets/Sonic-Poses/Sonic-Balancing.png',
     ring: 'assets/Ring.png',
     spring: 'FullAssets/Accessories/Spring.png',
     plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
@@ -272,23 +273,8 @@ function loadAssets() {
                 sounds[key] = audio;
                 assetsLoaded++;
                 console.log(`✓ Loaded ${key} (${assetsLoaded}/${totalAssets})`);
-                
-                console.log('🔊 Attempting to play Sega audio during loading...');
-                audio.currentTime = 0;
-                const playPromise = audio.play();
-                if (playPromise !== undefined) {
-                    playPromise
-                        .then(() => {
-                            console.log('🔊 Sega audio playing during loading screen!');
-                        })
-                        .catch(error => {
-                            console.log('🔊 Sega autoplay blocked - storing for user interaction');
-                            window.immediateAudio = audio;
-                        });
-                } else {
-                    window.immediateAudio = audio;
-                }
-                
+                // Playback is driven by the timer set up on page load, so this
+                // copy is only here for startMusic() to silence.
                 checkAllAssetsLoaded();
             };
             audio.onerror = (e) => {
@@ -441,17 +427,40 @@ const POSE_SPRITES = {
     launch: 'sonicLaunching',
     fall: 'sonicLanding',
     land: 'sonicLanding',
+    balance: 'sonicBalancing',
     run: 'sonicRun',
     idle: 'sonicIdle'
 };
 
+// Per-pose size trim, applied on top of the hitbox height. The sprawl reads far
+// bigger than the others at matched height, so it is drawn back a quarter.
+const POSE_SCALE = {
+    hurt: 0.75
+};
+
 const LANDING_HOLD = 9;     // frames the touchdown pose stays up
+
+// How far ahead of Sonic's feet to sample the ground, and how far it has to
+// fall away over that distance before he is standing on a lip.
+const EDGE_LOOK = 46;
+const EDGE_DROP = 70;
+
+// True when the ground ahead of the way Sonic is facing drops out from under
+// him — the lip of a ledge, or the point where two very different ground
+// angles meet. The heightmap already knows exactly where those are.
+function isOnEdge() {
+    const centerX = sonic.x + sonic.width / 2;
+    const ahead = centerX + EDGE_LOOK * sonic.direction;
+    if (ahead < 0 || ahead > LEVEL_WIDTH) return false;
+    return getGroundLevel(ahead) - getGroundLevel(centerX) > EDGE_DROP;
+}
 
 function choosePose() {
     if (sonic.isHurt) return 'hurt';
     if (sonic.isSpinDashing || sonic.isRolling) return 'spin';
     if (!sonic.onGround) return sonic.velocityY < 0 ? 'launch' : 'fall';
     if (sonic.landTimer > 0) return 'land';
+    if (Math.abs(sonic.velocityX) < 0.5 && isOnEdge()) return 'balance';
     return sonic.animationFrame === 1 ? 'run' : 'idle';
 }
 
@@ -712,30 +721,38 @@ function initializeGame() {
 // Everything that applies only when Sonic is on foot: input, gravity, terrain,
 // springs and spikes. Tornado mode replaces the whole lot with updatePlane().
 function updateOnFoot() {
-    // Spin Dash mechanics
-    if (keys['ArrowDown'] && sonic.onGround && !sonic.isRolling) {
-        if (!sonic.isSpinDashing) {
-            sonic.isSpinDashing = true;
-            startChargingSound();
-        }
-        sonic.velocityX = 0;
-        
+    // Spin Dash. Charging works in mid-air too, so a dash can be wound up on the
+    // way down from a jump. In the air Sonic keeps his momentum while charging —
+    // only a charge on the ground plants him. The launch always waits until he
+    // has landed, so releasing early just means he fires the moment he touches
+    // down rather than throwing him sideways out of the sky.
+    if (keys['ArrowDown'] && !sonic.isRolling) {
+        sonic.isSpinDashing = true;
+        startChargingSound();                   // no-ops if already running
+        if (sonic.onGround) sonic.velocityX = 0;
+
         if (sonic.spinDashCharge < sonic.spinDashMaxCharge) {
             sonic.spinDashCharge += 2;
         }
-        
+
         sonic.spinAnimationFrame += 0.5;
         sonic.animationFrame = 2;
-    } 
-    else if (sonic.isSpinDashing && !keys['ArrowDown']) {
+    }
+    else if (sonic.isSpinDashing && sonic.onGround) {
         stopChargingSound();
-        
+
         const launchSpeed = (sonic.spinDashCharge / sonic.spinDashMaxCharge) * 15 + 8;
         sonic.velocityX = launchSpeed * sonic.direction;
         sonic.isSpinDashing = false;
         sonic.isRolling = true;
         sonic.spinDashCharge = 0;
         playSpinDashLaunchSound();
+    }
+    else if (sonic.isSpinDashing) {
+        // Released while still falling: keep the charge but drop the whine. The
+        // dash fires on the frame he touches down.
+        stopChargingSound();
+        sonic.spinAnimationFrame += 0.5;
     }
     else if (!sonic.isSpinDashing) {
         if (sonic.isRolling && Math.abs(sonic.velocityX) < 3) {
@@ -1257,7 +1274,7 @@ function drawSonic() {
     // The poses are drawn at wildly different aspects (0.63 for the launch,
     // 1.42 for the sprawl), so match the hitbox height and let the width follow
     // the art. Squeezing them all into a square box distorts every one of them.
-    const drawHeight = sonic.height;
+    const drawHeight = sonic.height * (POSE_SCALE[sonic.pose] || 1);
     const drawWidth = sprite.naturalHeight
         ? drawHeight * (sprite.naturalWidth / sprite.naturalHeight)
         : sonic.width;
@@ -1325,32 +1342,38 @@ function gameLoop() {
     requestAnimationFrame(gameLoop);
 }
 
+// Delay before the Sega jingle fires on its own, with no click needed.
+const SEGA_DELAY = 2000;
+
 // Start the game
 window.addEventListener('load', () => {
-    console.log('🎮 Page loaded - Starting immediate audio attempt...');
-    
-    const immediateSegaAttempt = new Audio('assets/sega.mp3');
-    immediateSegaAttempt.volume = 0.8;
-    immediateSegaAttempt.preload = 'auto';
-    
-    const tryPlayImmediate = () => {
-        immediateSegaAttempt.currentTime = 0;
-        const playPromise = immediateSegaAttempt.play();
+    console.log('🎮 Page loaded - Sega jingle queued for 2s');
+
+    const segaJingle = new Audio('assets/sega.mp3');
+    segaJingle.volume = 0.8;
+    segaJingle.preload = 'auto';
+
+    const playSega = () => {
+        segaJingle.currentTime = 0;
+        const playPromise = segaJingle.play();
         if (playPromise !== undefined) {
             playPromise
                 .then(() => {
-                    console.log('🔊 Sega audio playing IMMEDIATELY on page load!');
+                    console.log('🔊 Sega jingle playing on its own');
+                    window.immediateAudio = null;
                 })
-                .catch(error => {
-                    console.log('🔊 Immediate play blocked, will try on first interaction');
-                    window.immediateAudio = immediateSegaAttempt;
+                .catch(() => {
+                    // Browsers refuse autoplay until the page has been
+                    // interacted with, so keep it armed for the first key or
+                    // click instead of dropping it.
+                    console.log('🔊 Autoplay blocked - will fire on first key or click');
+                    window.immediateAudio = segaJingle;
                 });
         }
     };
-    
-    tryPlayImmediate();
-    setTimeout(tryPlayImmediate, 100);
-    
+
+    setTimeout(playSega, SEGA_DELAY);
+
     loadAssets();
     gameLoop();
 });
