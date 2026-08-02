@@ -84,7 +84,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 16;
+const totalAssets = 17;
 
 // Game states
 let currentGameState = 'loading';
@@ -240,6 +240,7 @@ const assetPaths = {
     sonicColliding: 'assets/Sonic-Colliding.png',
     ring: 'assets/Ring.png',
     spring: 'FullAssets/Accessories/Spring.png',
+    plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
     loadingScreen: 'assets/LoadingScreen.png',
     levelEndSign: 'assets/Level-End-Sign1.png',
     badnik1_frame1: 'assets/badnik1_frame1.png',
@@ -372,7 +373,11 @@ document.addEventListener('keydown', (e) => {
         document.getElementById('loadingStatus').style.display = 'none';
         initializeGame();
     }
-    
+
+    if (currentGameState === 'playing' && e.code === 'KeyT') {
+        setPlaneMode(!planeMode);
+    }
+
     e.preventDefault();
 });
 
@@ -434,6 +439,71 @@ const TERMINAL_VELOCITY = 28;
 
 // A rise in the ground bigger than this is a wall, not a step Sonic walks up.
 const MAX_STEP = 24;
+
+// ---------------------------------------------------------------------------
+// TORNADO MODE (press T)
+//
+// Swaps Sonic for the Tornado biplane and turns the level into a flying stage.
+// The plane ignores terrain completely — no gravity, no ground, no walls, no
+// spikes, no springs — and is held in only by the edges of the level. It still
+// collects rings, and it destroys any badnik it touches without being hurt.
+// The art has the plane facing left, so it is mirrored to fly right.
+// ---------------------------------------------------------------------------
+const SONIC_SIZE = sonic.width;
+const PLANE_WIDTH = worldSize(4);
+const PLANE_HEIGHT = Math.round(PLANE_WIDTH * 260 / 380);   // keep the art's aspect
+const PLANE_SPEED = 5;
+const PLANE_CLIMB = 4.5;
+
+let planeMode = false;
+
+// Swap the player's body around its own centre, so the switch happens where the
+// player already is instead of jerking them somewhere else.
+function setPlaneMode(on) {
+    if (on === planeMode) return;
+
+    const centerX = sonic.x + sonic.width / 2;
+    const centerY = sonic.y + sonic.height / 2;
+
+    planeMode = on;
+    sonic.width = on ? PLANE_WIDTH : SONIC_SIZE;
+    sonic.height = on ? PLANE_HEIGHT : SONIC_SIZE;
+    sonic.x = centerX - sonic.width / 2;
+    sonic.y = centerY - sonic.height / 2;
+
+    sonic.velocityX = 0;
+    sonic.velocityY = 0;
+    sonic.onGround = false;
+    sonic.isRolling = false;
+    sonic.isSpinDashing = false;
+    sonic.spinDashCharge = 0;
+    sonic.launchTimer = 0;
+    // The hurt timer only ticks on foot, so clear it rather than leave Sonic
+    // stuck mid-flinch for the whole flight.
+    sonic.isHurt = false;
+    sonic.hurtTimer = 0;
+    stopChargingSound();
+
+    console.log(on ? '✈️ Tornado mode' : '🏃 Back on foot');
+}
+
+// Constant forward cruise; the arrows only point the nose up or down.
+function updatePlane() {
+    sonic.direction = 1;
+    sonic.velocityX = PLANE_SPEED;
+
+    let climb = 0;
+    if (keys['ArrowUp'] || keys['KeyW']) climb -= 1;
+    if (keys['ArrowDown'] || keys['KeyS']) climb += 1;
+    sonic.velocityY = climb * PLANE_CLIMB;
+
+    sonic.x += sonic.velocityX;
+    sonic.y += sonic.velocityY;
+
+    // Nothing stops the plane except the edges of the level itself.
+    sonic.x = Math.min(Math.max(sonic.x, 0), LEVEL_WIDTH - sonic.width);
+    sonic.y = Math.min(Math.max(sonic.y, 0), LEVEL_BOTTOM - sonic.height);
+}
 
 // Game objects
 let rings = [];
@@ -586,7 +656,8 @@ function initializeGame() {
         crossed: false
     };
 
-    // Reset Sonic
+    // Reset Sonic — back on foot, whatever the player was flying a moment ago
+    setPlaneMode(false);
     sonic.x = 80;
     sonic.y = getGroundLevel(sonic.x + sonic.width / 2) - sonic.height;
     sonic.velocityX = 0;
@@ -610,8 +681,9 @@ function initializeGame() {
     console.log('Game initialized with', rings.length, 'rings and', badniks.length, 'badniks!');
 }
 
-// Main game update loop
-function update() {
+// Everything that applies only when Sonic is on foot: input, gravity, terrain,
+// springs and spikes. Tornado mode replaces the whole lot with updatePlane().
+function updateOnFoot() {
     // Spin Dash mechanics
     if (keys['ArrowDown'] && sonic.onGround && !sonic.isRolling) {
         if (!sonic.isSpinDashing) {
@@ -795,6 +867,16 @@ function update() {
         sonic.spinDashCharge = 0;
         sonic.launchTimer = 0;
     }
+}
+
+// Main game update loop
+function update() {
+    if (planeMode) {
+        updatePlane();
+        Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
+    } else {
+        updateOnFoot();
+    }
 
     // Camera follows Sonic, clamped to what the paintings actually cover. The
     // chained level is only a little taller than the canvas, so the vertical
@@ -836,11 +918,12 @@ function update() {
                     sonic.y + sonic.height > badnik.y) {
                     
                     console.log('COLLISION!');
-                    
-                    const isJumpingOnTop = sonic.velocityY > 0 && sonic.y < badnik.y;
+
+                    // The Tornado just flattens whatever it flies into.
+                    const isJumpingOnTop = !planeMode && sonic.velocityY > 0 && sonic.y < badnik.y;
                     const isSpinDashing = sonic.isRolling || sonic.isSpinDashing;
-                    
-                    if (isJumpingOnTop || isSpinDashing) {
+
+                    if (planeMode || isJumpingOnTop || isSpinDashing) {
                         badnik.destroyed = true;
                         playBadnikDestroySound();
                         console.log('Badnik destroyed!');
@@ -886,8 +969,10 @@ function update() {
         }, 1500);
     }
     
-    // Sonic animation
-    if (sonic.isSpinDashing || sonic.isRolling) {
+    // Sonic animation (the plane has a single frame, so skip it while flying)
+    if (planeMode) {
+        // nothing to cycle
+    } else if (sonic.isSpinDashing || sonic.isRolling) {
         sonic.animationFrame = 2;
         sonic.spinAnimationFrame += 0.3;
     } else if (Math.abs(sonic.velocityX) > 0.5) {
@@ -1095,9 +1180,43 @@ function renderGame() {
         }
     }
     
-    // Draw Sonic
+    // Draw the player — the Tornado in plane mode, Sonic otherwise
+    if (planeMode) {
+        drawPlane();
+    } else {
+        drawSonic();
+    }
+
+    // Draw spin dash charge indicator
+    if (sonic.isSpinDashing) {
+        const chargePercent = sonic.spinDashCharge / sonic.spinDashMaxCharge;
+        const barWidth = 60;
+        const barHeight = 8;
+        const barX = sonic.x - 14;
+        const barY = sonic.y - 20;
+
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(barX, barY, barWidth, barHeight);
+
+        ctx.fillStyle = chargePercent > 0.8 ? '#FF0000' : '#FFFF00';
+        ctx.fillRect(barX + 2, barY + 2, (barWidth - 4) * chargePercent, barHeight - 4);
+
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX, barY, barWidth, barHeight);
+    }
+
+    // Draw level end sign
+    if (levelEndSign && images.levelEndSign && !levelEndSign.crossed) {
+        ctx.drawImage(images.levelEndSign, levelEndSign.x, levelEndSign.y, levelEndSign.width, levelEndSign.height);
+    }
+
+    ctx.restore();
+}
+
+function drawSonic() {
     let sonicSprite;
-    
+
     if (sonic.isHurt) {
         sonicSprite = images.sonicColliding;
     } else if (sonic.animationFrame === 2) {
@@ -1107,56 +1226,49 @@ function renderGame() {
     } else {
         sonicSprite = images.sonicRun;
     }
-    
-    if (sonicSprite) {
-        ctx.save();
-        ctx.translate(sonic.x + sonic.width/2, sonic.y + sonic.height/2);
-        
-        if (sonic.isHurt) {
-            const flashRate = Math.floor(sonic.hurtTimer / 8) % 2;
-            if (flashRate === 0) {
-                ctx.globalAlpha = 0.5;
-            }
+
+    if (!sonicSprite) return;
+
+    ctx.save();
+    ctx.translate(sonic.x + sonic.width / 2, sonic.y + sonic.height / 2);
+
+    if (sonic.isHurt) {
+        const flashRate = Math.floor(sonic.hurtTimer / 8) % 2;
+        if (flashRate === 0) {
+            ctx.globalAlpha = 0.5;
         }
-        
-        if (sonic.direction === -1) {
-            ctx.scale(-1, 1);
-        }
-        
-        if (sonic.animationFrame === 2 && !sonic.isHurt) {
-            ctx.rotate(sonic.spinAnimationFrame);
-        }
-        
-        ctx.drawImage(sonicSprite, -sonic.width/2, -sonic.height/2, sonic.width, sonic.height);
-        ctx.restore();
     }
-    
-    // Draw spin dash charge indicator
-    if (sonic.isSpinDashing) {
-        const chargePercent = sonic.spinDashCharge / sonic.spinDashMaxCharge;
-        const barWidth = 60;
-        const barHeight = 8;
-        const barX = sonic.x - 14;
-        const barY = sonic.y - 20;
-        
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(barX, barY, barWidth, barHeight);
-        
-        ctx.fillStyle = chargePercent > 0.8 ? '#FF0000' : '#FFFF00';
-        ctx.fillRect(barX + 2, barY + 2, (barWidth - 4) * chargePercent, barHeight - 4);
-        
-        ctx.strokeStyle = '#FFFFFF';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+    if (sonic.direction === -1) {
+        ctx.scale(-1, 1);
     }
-    
-    // Draw level end sign
-    if (levelEndSign && images.levelEndSign && !levelEndSign.crossed) {
-        ctx.drawImage(images.levelEndSign, levelEndSign.x, levelEndSign.y, levelEndSign.width, levelEndSign.height);
+
+    if (sonic.animationFrame === 2 && !sonic.isHurt) {
+        ctx.rotate(sonic.spinAnimationFrame);
     }
-    
+
+    ctx.drawImage(sonicSprite, -sonic.width / 2, -sonic.height / 2, sonic.width, sonic.height);
     ctx.restore();
 }
+
+// The Tornado art faces left, so it is mirrored to fly right. The nose tips
+// with the climb so the plane leans into whichever way it is being steered.
+function drawPlane() {
+    const art = images.plane;
+    ctx.save();
+    ctx.translate(sonic.x + sonic.width / 2, sonic.y + sonic.height / 2);
+    ctx.rotate((sonic.velocityY / PLANE_CLIMB) * 0.18);
+    ctx.scale(-1, 1);
+
+    if (art) {
+        ctx.drawImage(art, -sonic.width / 2, -sonic.height / 2, sonic.width, sonic.height);
+    } else {
+        ctx.fillStyle = '#d02020';
+        ctx.fillRect(-sonic.width / 2, -sonic.height / 2, sonic.width, sonic.height);
+    }
+    ctx.restore();
+}
+
 
 // Update UI elements
 function updateUI() {
