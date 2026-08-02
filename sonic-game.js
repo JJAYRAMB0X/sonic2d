@@ -7,6 +7,7 @@ const ctx = canvas.getContext('2d');
 // one continuous side-scroller:
 //
 //   Level-.png                        grass ledges over water pits
+//   Level-2.png                       a short flat run under the palms
 //   Level-3.png                       a long, gently rolling jungle run
 //   Level-With_Loop.png               a slope down to the lake, then the loop
 //   Level-With_Spikes-Springboard.png stepped blocks, waterfall, high towers
@@ -35,6 +36,7 @@ const LEVEL_ASSET_DIR = 'FullAssets/Levels-Flattened-Layer/';
 
 const LEVEL_SEGMENTS = [
     { key: 'levelA', file: 'Level-.png',                        imageWidth: 512,  imageHeight: 257,  band: 17 },
+    { key: 'level2', file: 'Level-2.png',                       imageWidth: 419,  imageHeight: 350,  band: 41 },
     { key: 'level3', file: 'Level-3.png',                       imageWidth: 1808, imageHeight: 1288, band: 93 },
     { key: 'loop',   file: 'Level-With_Loop.png',                imageWidth: 530,  imageHeight: 359,  band: 17 },
     { key: 'spikes', file: 'Level-With_Spikes-Springboard.png', imageWidth: 875,  imageHeight: 428,  band: 31 }
@@ -102,7 +104,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 21;
+const totalAssets = 22;
 
 // Game states
 let currentGameState = 'loading';
@@ -434,7 +436,10 @@ let sonic = {
     invulnerabilityTime: 120,
     launchTimer: 0,
     landTimer: 0,
-    pose: 'idle'
+    pose: 'idle',
+    onLoop: null,
+    loopBlocked: null,
+    spriteAngle: 0
 };
 
 // Which sprite each pose draws with. Rising and falling get their own poses, so
@@ -474,6 +479,7 @@ function isOnEdge() {
 }
 
 function choosePose() {
+    if (sonic.onLoop) return 'spin';            // curled up round the track
     if (sonic.isHurt) return 'hurt';
     if (sonic.isSpinDashing || sonic.isRolling) return 'spin';
     if (!sonic.onGround) return sonic.velocityY < 0 ? 'launch' : 'fall';
@@ -535,6 +541,8 @@ function setPlaneMode(on) {
     // stuck mid-flinch for the whole flight.
     sonic.isHurt = false;
     sonic.hurtTimer = 0;
+    sonic.onLoop = null;
+    sonic.spriteAngle = 0;
     stopChargingSound();
 
     console.log(on ? '✈️ Tornado mode' : '🏃 Back on foot');
@@ -617,13 +625,134 @@ for (const spring of SPRINGS) {
     if (spring.sprite) spring.y = getGroundLevel(spring.x + spring.width / 2) - spring.height;
 }
 
+// ---------------------------------------------------------------------------
+// THE LOOP
+//
+// This is the one thing the heightmap genuinely cannot describe. getGroundLevel
+// returns a single y for each x, so it can express a hill or a cliff but never a
+// surface that turns vertical (infinite slope) and then inverts — which is most
+// of a loop. It also cannot hold two surfaces at the same x, and a loop needs
+// both a floor and a ceiling.
+//
+// So the loop is not terrain at all: it is a circle Sonic latches onto and rides
+// on rails. Arriving at the bottom with enough speed attaches him; he then runs
+// the full 360 with his feet on the inside of the circle and his sprite rotating
+// with the track, and is released at the bottom facing the way he came in.
+//
+// The circle is placed by hand from the art. It cannot be fitted from the
+// pixels: where the loop meets the ground the drawing flattens out into the
+// shaded rim, so the measured boundary there is a shallow bowl rather than an
+// arc, and a least-squares fit swings between radius 88 and 126 depending on
+// which columns you feed it.
+// ---------------------------------------------------------------------------
+function loopFromArt(segmentKey, centreX, centreY, radius) {
+    const segment = LEVEL_SEGMENTS.find(s => s.key === segmentKey);
+    return {
+        cx: segment.x + centreX * segment.scale,
+        cy: segment.y + centreY * segment.scale,
+        radius: radius * segment.scale
+    };
+}
+
+// Centre sits 13px lower than the drawn hole's centre so the bottom of the ride
+// lands exactly on the floor, rather than making Sonic pop up on entry.
+const LOOPS = [loopFromArt('loop', 370, 216, 82)];
+
+// Below this Sonic cannot hold the inside of the loop and simply runs past it.
+// A plain run (speed 6) just makes it; walking out of a spin dash flies round.
+const LOOP_MIN_SPEED = 5;
+
+// The flat top of the loop block, which is solid but sits high above the ground
+// the heightmap describes — the second surface at the same x that the heightmap
+// has no way to hold. One-way: you land on it from above, never from below.
+const PLATFORMS = [
+    fromArt('loop', 258, 105, 262, 10)
+];
+
 const overlaps = (a, b) =>
     a.x < b.x + b.width && a.x + a.width > b.x &&
     a.y < b.y + b.height && a.y + a.height > b.y;
 
+// Sonic's feet ride the inside of the circle, so his body sits one half-height
+// in from it, and the sprite turns with the track: at the bottom he is upright,
+// on the right wall his feet point right, at the top he is upside down.
+function placeOnLoop() {
+    const ride = sonic.onLoop;
+    const bodyRadius = ride.loop.radius - sonic.height / 2;
+    sonic.x = ride.loop.cx + Math.cos(ride.angle) * bodyRadius - sonic.width / 2;
+    sonic.y = ride.loop.cy + Math.sin(ride.angle) * bodyRadius - sonic.height / 2;
+    sonic.spriteAngle = ride.angle - Math.PI / 2;
+}
+
+// Attach when Sonic crosses the foot of a loop on the ground with enough speed.
+function tryEnterLoop() {
+    const centerX = sonic.x + sonic.width / 2;
+
+    // A ride ends at the foot of the circle, right back inside the entry zone,
+    // so the loop that just released him stays blocked until he has actually
+    // left its span. Otherwise he would spin round it forever.
+    if (sonic.loopBlocked && Math.abs(centerX - sonic.loopBlocked.cx) > sonic.loopBlocked.radius) {
+        sonic.loopBlocked = null;
+    }
+
+    if (sonic.onLoop || !sonic.onGround) return;
+
+    const speed = Math.abs(sonic.velocityX);
+    if (speed < LOOP_MIN_SPEED) return;
+
+    const feet = sonic.y + sonic.height;
+
+    for (const loop of LOOPS) {
+        if (loop === sonic.loopBlocked) continue;
+        if (Math.abs(centerX - loop.cx) > loop.radius * 0.75) continue;
+        if (Math.abs(feet - (loop.cy + loop.radius)) > loop.radius * 0.5) continue;
+
+        sonic.onLoop = {
+            loop: loop,
+            angle: Math.PI / 2,                 // the foot of the circle
+            travelled: 0,
+            speed: speed,
+            direction: sonic.velocityX >= 0 ? 1 : -1
+        };
+        sonic.direction = sonic.onLoop.direction;
+        sonic.onGround = true;
+        sonic.velocityY = 0;
+        placeOnLoop();
+        return;
+    }
+}
+
+// On rails: the player's speed drives the angle, and gravity is ignored until
+// the circle is finished. Real centripetal physics would need an entry speed of
+// about 28 to hold a loop this size, which nothing in the game can reach.
+function updateLoopRide() {
+    const ride = sonic.onLoop;
+    const step = ride.speed / ride.loop.radius;
+
+    ride.angle -= step * ride.direction;
+    ride.travelled += step;
+
+    if (ride.travelled >= Math.PI * 2) {
+        sonic.velocityX = ride.speed * ride.direction;
+        sonic.velocityY = 0;
+        sonic.spriteAngle = 0;
+        sonic.loopBlocked = ride.loop;
+        sonic.onLoop = null;
+        return;
+    }
+
+    placeOnLoop();
+    sonic.velocityX = ride.speed * ride.direction;
+    sonic.onGround = true;
+    sonic.spinAnimationFrame += 0.3;
+}
+
 // Shared by badniks and spikes so a hit costs the same either way.
 function hurtSonic(knockbackDirection) {
     console.log('Sonic hurt!');
+
+    sonic.onLoop = null;                        // knocked off the track
+    sonic.spriteAngle = 0;
 
     if (gameData.rings > 0) {
         gameData.rings = Math.max(0, gameData.rings - 10);
@@ -733,6 +862,9 @@ function initializeGame() {
     sonic.launchTimer = 0;
     sonic.landTimer = 0;
     sonic.pose = 'idle';
+    sonic.onLoop = null;
+    sonic.loopBlocked = null;
+    sonic.spriteAngle = 0;
 
     // Reset game state
     gameData.rings = 0;
@@ -747,6 +879,13 @@ function initializeGame() {
 // Everything that applies only when Sonic is on foot: input, gravity, terrain,
 // springs and spikes. Tornado mode replaces the whole lot with updatePlane().
 function updateOnFoot() {
+    // Riding a loop overrides everything else until the circle is finished.
+    if (sonic.onLoop) {
+        updateLoopRide();
+        Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
+        return;
+    }
+
     // Spin Dash. Charging works in mid-air too, so a dash can be wound up on the
     // way down from a jump. In the air Sonic keeps his momentum while charging —
     // only a charge on the ground plants him. The launch always waits until he
@@ -852,6 +991,7 @@ function updateOnFoot() {
     // column whose surface sits far above Sonic's feet is a wall he has to jump
     // — without this he would teleport up the ledges the art clearly blocks.
     const previousX = sonic.x;
+    const previousFeet = sonic.y + sonic.height;
     sonic.x += sonic.velocityX;
 
     if (sonic.x < 0) {
@@ -900,6 +1040,24 @@ function updateOnFoot() {
         // spent standing still on the ground.
         if (!wasOnGround) sonic.landTimer = LANDING_HOLD;
     }
+
+    // One-way platforms: land on the top of the loop block if his feet crossed
+    // it on the way down. Rising through it from below is free.
+    if (sonic.velocityY >= 0) {
+        for (const platform of PLATFORMS) {
+            if (sonic.x + sonic.width <= platform.x || sonic.x >= platform.x + platform.width) continue;
+            if (previousFeet > platform.y + 2) continue;
+            if (sonic.y + sonic.height < platform.y) continue;
+
+            sonic.y = platform.y - sonic.height;
+            sonic.velocityY = 0;
+            sonic.onGround = true;
+            sonic.canDoubleJump = false;
+            if (!wasOnGround) sonic.landTimer = LANDING_HOLD;
+        }
+    }
+
+    tryEnterLoop();
 
     // Springs. Checked after the ground snap so landing on one overrides the
     // landing: come down on it and you go straight back up, harder than a jump.
@@ -1315,12 +1473,17 @@ function drawSonic() {
         }
     }
 
-    if (sonic.direction === -1) {
-        ctx.scale(-1, 1);
+    // Rotation has to come before the mirror. The other way round, a leftward
+    // loop ride would turn the wrong way, because mirroring reverses the sense
+    // of the angle as well as the sprite.
+    if (sonic.onLoop) {
+        ctx.rotate(sonic.spriteAngle);          // turn with the track
+    } else if (sonic.pose === 'spin') {
+        ctx.rotate(sonic.spinAnimationFrame);
     }
 
-    if (sonic.pose === 'spin') {
-        ctx.rotate(sonic.spinAnimationFrame);
+    if (sonic.direction === -1) {
+        ctx.scale(-1, 1);
     }
 
     ctx.drawImage(sprite, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
