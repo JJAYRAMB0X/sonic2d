@@ -8,6 +8,7 @@ const ctx = canvas.getContext('2d');
 //
 //   Level-.png                        grass ledges over water pits
 //   Level-3.png                       a long, gently rolling jungle run
+//   Level-With_Loop.png               a slope down to the lake, then the loop
 //   Level-With_Spikes-Springboard.png stepped blocks, waterfall, high towers
 //
 // Every fact about the ground comes from those images. The terrain is drawn
@@ -22,8 +23,12 @@ const ctx = canvas.getContext('2d');
 // band is LEVEL_TILE tall everywhere and terrain reads at a consistent size.
 //
 // Segments are then laid end to end, and each is nudged vertically so the ground
-// where it starts meets the ground where the previous one ended. The joins come
-// out seamless: 471 -> 471 and 441 -> 441 world pixels.
+// where it starts meets the ground where the previous one ended. Every join
+// comes out flush to within a pixel.
+//
+// The loop painting carries a lot of sky above its ground, so matching its seam
+// pushes it above the others; the whole layout is shifted down afterwards to
+// keep the world's top edge at zero.
 // ===========================================================================
 const LEVEL_TILE = 40;              // world pixels per source grass band
 const LEVEL_ASSET_DIR = 'FullAssets/Levels-Flattened-Layer/';
@@ -31,6 +36,7 @@ const LEVEL_ASSET_DIR = 'FullAssets/Levels-Flattened-Layer/';
 const LEVEL_SEGMENTS = [
     { key: 'levelA', file: 'Level-.png',                        imageWidth: 512,  imageHeight: 257,  band: 17 },
     { key: 'level3', file: 'Level-3.png',                       imageWidth: 1808, imageHeight: 1288, band: 93 },
+    { key: 'loop',   file: 'Level-With_Loop.png',                imageWidth: 530,  imageHeight: 359,  band: 17 },
     { key: 'spikes', file: 'Level-With_Spikes-Springboard.png', imageWidth: 875,  imageHeight: 428,  band: 31 }
 ];
 
@@ -53,11 +59,23 @@ function buildLevel() {
         previousGroundY = segment.y + segment.heightmap[segment.heightmap.length - 1] * segment.scale;
         x += segment.width;
     }
+
+    // Matching seams can drive a tall painting above the origin; slide the whole
+    // chain back down so world coordinates stay positive.
+    const highest = Math.min(...LEVEL_SEGMENTS.map(s => s.y));
+    for (const segment of LEVEL_SEGMENTS) segment.y -= highest;
+
     return x;
 }
 
 const LEVEL_WIDTH = buildLevel();
 const LEVEL_BOTTOM = Math.max(...LEVEL_SEGMENTS.map(s => s.y + s.height));
+
+// An x position measured from the start of a named segment, so inserting a new
+// painting earlier in the chain does not silently move everything after it.
+function atSegment(key, offsetX) {
+    return LEVEL_SEGMENTS.find(s => s.key === key).x + offsetX;
+}
 
 function segmentAt(worldX) {
     for (let i = LEVEL_SEGMENTS.length - 1; i > 0; i--) {
@@ -84,7 +102,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 20;
+const totalAssets = 21;
 
 // Game states
 let currentGameState = 'loading';
@@ -548,7 +566,7 @@ let levelEndSign = null;
 // The goal sits on the low ground just before the final tower, which is a 406px
 // rise — taller than a jump. Reaching its top is an optional double-jump stunt,
 // never something the player has to do to finish.
-const LEVEL_END_X = 2900;
+const LEVEL_END_X = atSegment('spikes', 918);
 
 // Things painted into the level art get their boxes in the image pixels of the
 // segment they belong to, converted through that segment's own scale — the same
@@ -585,7 +603,7 @@ const SPRINGS = [
         // vertical bounce would drop a slow-moving Sonic straight into the
         // spikes, whereas the push makes the arc clear them whatever speed he
         // arrives at.
-        x: 2130,
+        x: atSegment('spikes', 148),
         y: 0,                                   // dropped onto the ground below
         width: SPRING_SPRITE_SIZE.width,
         height: SPRING_SPRITE_SIZE.height,
@@ -639,12 +657,17 @@ function initializeGame() {
         addRing(x, getGroundLevel(x + ringSize / 2) - ringSize - 45 - bob, (x / 55) % Math.PI);
     }
 
-    // Arcs tempting a jump over the water pits, the jungle dip and the climb up
-    // into the block towers.
+    // Arcs tempting a jump over the water pits, the jungle dip, the inside of
+    // the loop and the climb up into the block towers. Anything past the first
+    // two paintings is measured from its own segment so the chain can be
+    // reordered without every arc drifting.
     [
-        { start: 200, end: 560 }, { start: 1000, end: 1160 },
-        { start: 1450, end: 1750 }, { start: 2180, end: 2420 },
-        { start: 2620, end: 2800 }
+        { start: 200, end: 560 },
+        { start: 1000, end: 1160 },
+        { start: atSegment('level3', 245), end: atSegment('level3', 545) },
+        { start: atSegment('loop', 640), end: atSegment('loop', 1060) },
+        { start: atSegment('spikes', 198), end: atSegment('spikes', 438) },
+        { start: atSegment('spikes', 638), end: atSegment('spikes', 818) }
     ].forEach(gap => {
         const span = gap.end - gap.start;
         for (let i = 0; i <= 6; i++) {
@@ -660,8 +683,11 @@ function initializeGame() {
     badniks = [];
     [
         { x: 300, type: 1 }, { x: 460, type: 2 }, { x: 800, type: 1 },
-        { x: 1350, type: 2 }, { x: 1650, type: 1 }, { x: 1900, type: 2 },
-        { x: 2150, type: 1 }, { x: 2320, type: 2 }, { x: 2850, type: 1 }
+        { x: atSegment('level3', 145), type: 2 }, { x: atSegment('level3', 445), type: 1 },
+        { x: atSegment('level3', 695), type: 2 },
+        { x: atSegment('loop', 320), type: 1 }, { x: atSegment('loop', 1150), type: 2 },
+        { x: atSegment('spikes', 168), type: 1 }, { x: atSegment('spikes', 338), type: 2 },
+        { x: atSegment('spikes', 868), type: 1 }
     ].forEach(pos => {
         badniks.push({
             x: pos.x,
