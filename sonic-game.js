@@ -2,10 +2,67 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
+// ===========================================================================
+// LEVEL — FullAssets/Levels-Flattened-Layer/Level-.png
+//
+// The whole level is one 512x257 painting. Every fact about the ground comes
+// from that single image: the terrain is drawn straight from it, and
+// GROUND_HEIGHTMAP below was measured off its pixels — one row per image
+// column. Each column was scanned upward through the solid terrain mass and
+// the surface taken as the top of the grass band capping it; a grass band only
+// counts as ground when the dark soil layer sits underneath it, which is what
+// separates real terrain from the background ridge, palm trunks, bushes and
+// flowers that overhang it. Because collision and rendering read the same
+// image, what is drawn and what Sonic stands on cannot disagree.
+//
+// The art is 512x257 while the canvas is 800x600, so both the image and the
+// heightmap are scaled by LEVEL_SCALE, which fills the canvas vertically.
+// Heightmap values stay in image rows; getGroundLevel() applies the scale, so
+// there is exactly one conversion and the art can never drift from collision.
+// ===========================================================================
+const LEVEL_IMAGE_WIDTH = 512;
+const LEVEL_IMAGE_HEIGHT = 257;
+const LEVEL_SCALE = canvas.height / LEVEL_IMAGE_HEIGHT;   // 600 / 257 ≈ 2.335
+const LEVEL_WIDTH = LEVEL_IMAGE_WIDTH * LEVEL_SCALE;      // ≈ 1195 world px
+const LEVEL_HEIGHT = canvas.height;
+
+// Ground surface in image rows, one entry per image column (measured, not generated).
+const GROUND_HEIGHTMAP = [
+    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
+    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
+    129,129,129,129,129,129,129,129,129,129,129,129,129,130,131,133,191,191,192,192,192,192,192,192,192,192,192,192,192,192,193,193,
+    194,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,
+    197,198,198,198,198,198,198,198,198,198,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,
+    199,199,199,199,199,199,198,198,198,198,198,198,198,198,198,197,197,197,197,197,197,197,197,197,197,197,197,197,197,196,196,196,
+    195,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,
+    194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,194,193,193,193,193,193,193,193,193,193,193,193,193,
+    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
+    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,
+    129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,129,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+    128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+    128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,
+    191,191,192,192,192,192,192,192,192,192,192,192,192,192,193,193,194,194,194,194,194,194,194,194,194,195,195,195,195,195,195,195,
+    196,196,196,197,197,197,197,197,197,197,197,197,197,197,197,197,197,198,198,198,198,198,198,198,198,198,199,199,199,199,199,199,
+    199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,199,200
+];
+
+// The one place image rows become world pixels. Linear interpolation between
+// adjacent columns keeps the surface continuous instead of stair-stepping.
+function getGroundLevel(worldX) {
+    const column = Math.min(Math.max(worldX / LEVEL_SCALE, 0), LEVEL_IMAGE_WIDTH - 1);
+    const index = Math.floor(column);
+    const next = Math.min(index + 1, LEVEL_IMAGE_WIDTH - 1);
+    const t = column - index;
+    return (GROUND_HEIGHTMAP[index] + (GROUND_HEIGHTMAP[next] - GROUND_HEIGHTMAP[index]) * t) * LEVEL_SCALE;
+}
+
+// Sprites are authored against the same 512x257 art, so they scale with it.
+const spriteSize = (imagePixels) => Math.round(imagePixels * LEVEL_SCALE);
+
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 16;
+const totalAssets = 13;
 
 // Game states
 let currentGameState = 'loading';
@@ -135,10 +192,9 @@ let gameData = {
 
 // Asset file paths
 const assetPaths = {
-    background: 'assets/background.png',
-    terrain1: 'assets/terrain1.png',
-    terrain2: 'assets/terrain2.png',
-    terrain3: 'assets/terrain3.png', 
+    // The flattened level painting replaces the old tiled background/terrain art:
+    // it is both the terrain graphic and the source of GROUND_HEIGHTMAP.
+    level: 'FullAssets/Levels-Flattened-Layer/Level-.png',
     sonicIdle: 'assets/sonic_idle.png',
     sonicRun: 'assets/sonic_run.png',
     sonicSpin: 'assets/Sonic-Spin.png',
@@ -294,15 +350,15 @@ document.addEventListener('keyup', (e) => {
 
 // Sonic player object
 let sonic = {
-    x: 100,
-    y: 441,
-    width: 64,                 
-    height: 64,                
+    x: 80,
+    y: 0,
+    width: spriteSize(40),
+    height: spriteSize(40),
     velocityX: 0,
     velocityY: 0,
-    speed: 3.5,                
-    jumpPower: 16,             
-    doubleJumpPower: 24,       
+    speed: 6,
+    jumpPower: 21,
+    doubleJumpPower: 26,
     onGround: false,
     direction: 1,              
     animationFrame: 0,         
@@ -321,143 +377,98 @@ let sonic = {
     invulnerabilityTime: 120
 };
 
-// Physics constants
-const GRAVITY = 0.8;
+// Physics constants, sized for a world scaled up by LEVEL_SCALE. A jump rises
+// jumpPower^2 / (2 * GRAVITY) ≈ 220px, comfortably more than the ≈163px climb
+// from the water pits back up onto the grass ledges.
+const GRAVITY = 1.0;
 const FRICTION = 0.85;
-const TERMINAL_VELOCITY = 20;
+const TERMINAL_VELOCITY = 28;
+
+// A rise in the ground bigger than this is a wall, not a step Sonic walks up.
+const MAX_STEP = 24;
 
 // Game objects
 let rings = [];
 let badniks = [];
 let levelEndSign = null;
 
-// Level constants
-const LEVEL_WIDTH = 4800;
-const LEVEL_END_X = LEVEL_WIDTH - 200;
-
-// GROUND HEIGHTMAP
-// Single source of truth for both ground collision and terrain art: a
-// continuous, piecewise-linear array of segments built from a repeating
-// flat/cliff/hill pattern. Each segment starts where the previous one ended,
-// so there are no height discontinuities at tile boundaries, and terrain
-// rendering below reads the same tile-type pattern used to build it.
-const GROUND_TILE_WIDTH = 320;
-const GROUND_PATTERN = ['flat', 'cliff', 'hill'];
-const GROUND_RISE = 80;
-
-function buildGroundSegments() {
-    const segments = [];
-    const tileCount = Math.ceil(LEVEL_WIDTH / GROUND_TILE_WIDTH) + 1;
-    let startY = 505;
-
-    for (let i = 0; i < tileCount; i++) {
-        const type = GROUND_PATTERN[i % GROUND_PATTERN.length];
-        const startX = i * GROUND_TILE_WIDTH;
-        const endX = startX + GROUND_TILE_WIDTH;
-        let endY = startY;
-        if (type === 'cliff') endY = startY - GROUND_RISE;
-        if (type === 'hill') endY = startY + GROUND_RISE;
-
-        segments.push({ startX, endX, startY, endY, type });
-        startY = endY;
-    }
-    return segments;
-}
-
-const groundSegments = buildGroundSegments();
-
-function getGroundTileType(tileIndex) {
-    const patternLength = GROUND_PATTERN.length;
-    return GROUND_PATTERN[((tileIndex % patternLength) + patternLength) % patternLength];
-}
-
-function getGroundLevel(x) {
-    const clampedX = Math.min(Math.max(x, 0), LEVEL_WIDTH);
-    const segment = groundSegments[Math.min(
-        Math.floor(clampedX / GROUND_TILE_WIDTH),
-        groundSegments.length - 1
-    )];
-    const t = (clampedX - segment.startX) / (segment.endX - segment.startX);
-    return segment.startY + (segment.endY - segment.startY) * t;
-}
+const LEVEL_END_X = LEVEL_WIDTH - spriteSize(70);
 
 // Initialize game world
 function initializeGame() {
     console.log('Initializing game...');
     
-    // Create rings
+    // Rings ride the measured ground so they hug whatever the art actually does,
+    // instead of hanging at coordinates tuned to a level that no longer exists.
+    const ringSize = spriteSize(16);
     rings = [];
-    for (let i = 0; i < 60; i++) {
+    for (let x = 150; x < LEVEL_END_X - 60; x += 46) {
+        const bob = Math.sin(x / 90) * 30;
         rings.push({
-            x: 200 + i * 80 + Math.random() * 40,
-            y: 280 + Math.sin(i * 0.5) * 60,
+            x: x,
+            y: getGroundLevel(x + ringSize / 2) - ringSize - 45 - bob,
+            size: ringSize,
             collected: false,
-            animationFrame: 0
+            animationFrame: (x / 46) % Math.PI
         });
     }
-    
-    const bonusClusters = [
-        {x: 800, y: 250}, {x: 1200, y: 300}, {x: 1800, y: 280}, 
-        {x: 2400, y: 320}, {x: 3000, y: 250}, {x: 3600, y: 290},
-        {x: 4200, y: 300}
-    ];
-    
-    bonusClusters.forEach(cluster => {
-        for (let i = 0; i < 5; i++) {
+
+    // Arcs of rings tempting a jump across each water pit.
+    [{ start: 200, end: 560 }, { start: 1000, end: 1160 }].forEach(gap => {
+        const span = gap.end - gap.start;
+        for (let i = 0; i <= 6; i++) {
+            const t = i / 6;
+            const x = gap.start + span * t;
             rings.push({
-                x: cluster.x + i * 30,
-                y: cluster.y + Math.sin(i) * 20,
+                x: x,
+                y: getGroundLevel(x + ringSize / 2) - ringSize - 60 - Math.sin(t * Math.PI) * 150,
+                size: ringSize,
                 collected: false,
-                animationFrame: Math.random() * Math.PI
+                animationFrame: i * 0.4
             });
         }
     });
-    
-    // Create badniks
+
+    // Badniks patrol the ledges and pit floors; their y is re-read from the
+    // heightmap every frame in update(), so they walk on the drawn ground too.
+    const badnikSize = spriteSize(24);
     badniks = [];
-    const badnikPositions = [
-        {x: 500, y: 416, type: 1}, 
-        {x: 1000, y: 416, type: 2}, 
-        {x: 1500, y: 416, type: 1}, 
-        {x: 2000, y: 416, type: 2},
-        {x: 2500, y: 416, type: 1}, 
-        {x: 3000, y: 416, type: 2},
-        {x: 3500, y: 416, type: 1},
-        {x: 1100, y: 326, type: 2},
-        {x: 2700, y: 316, type: 1},
-        {x: 3500, y: 306, type: 2}
-    ];
-    
-    badnikPositions.forEach(pos => {
+    [
+        { x: 300, type: 1 }, { x: 460, type: 2 },
+        { x: 700, type: 1 }, { x: 880, type: 2 },
+        { x: 1000, type: 1 }
+    ].forEach(pos => {
         badniks.push({
             x: pos.x,
-            y: pos.y - 89,
-            width: 32,
-            height: 32,
-            type: pos.type, 
-            velocityX: pos.type === 1 ? 1.5 : -1.5, 
+            y: getGroundLevel(pos.x + badnikSize / 2) - badnikSize,
+            width: badnikSize,
+            height: badnikSize,
+            type: pos.type,
+            velocityX: pos.type === 1 ? 1.8 : -1.8,
             direction: pos.type === 1 ? 1 : -1,
             destroyed: false,
-            animationFrame: 0, 
-            animationSpeed: 0.15, 
-            frameCount: 2, 
-            patrolDistance: 120, 
-            startX: pos.x 
+            animationFrame: 0,
+            animationSpeed: 0.15,
+            frameCount: 2,
+            patrolDistance: 70,
+            startX: pos.x
         });
     });
-    
+
     // Create level end sign
+    const signWidth = spriteSize(40);
+    const signHeight = spriteSize(56);
     levelEndSign = {
         x: LEVEL_END_X,
-        y: 400,
-        width: 80,                
-        height: 96,
+        y: getGroundLevel(LEVEL_END_X + signWidth / 2) - signHeight,
+        width: signWidth,
+        height: signHeight,
         crossed: false
     };
-    
+
     // Reset Sonic
-    sonic.x = 100;
-    sonic.y = 441;
+    sonic.x = 80;
+    sonic.y = getGroundLevel(sonic.x + sonic.width / 2) - sonic.height;
     sonic.velocityX = 0;
     sonic.velocityY = 0;
     sonic.isSpinDashing = false;
@@ -566,10 +577,30 @@ function update() {
         sonic.velocityY = TERMINAL_VELOCITY;
     }
     
-    // Update Sonic's position
+    // Horizontal movement, then the cliff faces the heightmap describes. A
+    // column whose surface sits far above Sonic's feet is a wall he has to jump
+    // — without this he would teleport up the ledges the art clearly blocks.
+    const previousX = sonic.x;
     sonic.x += sonic.velocityX;
+
+    if (sonic.x < 0) {
+        sonic.x = 0;
+        sonic.velocityX = 0;
+        sonic.isRolling = false;
+    } else if (sonic.x > LEVEL_WIDTH - sonic.width) {
+        sonic.x = LEVEL_WIDTH - sonic.width;
+        sonic.velocityX = 0;
+        sonic.isRolling = false;
+    }
+
+    if (sonic.y + sonic.height > getGroundLevel(sonic.x + sonic.width / 2) + MAX_STEP) {
+        sonic.x = previousX;
+        sonic.velocityX = 0;
+        sonic.isRolling = false;
+    }
+
     sonic.y += sonic.velocityY;
-    
+
     // Update hurt state
     if (sonic.isHurt) {
         sonic.hurtTimer--;
@@ -577,11 +608,12 @@ function update() {
             sonic.isHurt = false;
         }
     }
-    
-    // Ground detection — single velocity-guarded snap against the continuous heightmap
+
+    // Ground detection — one velocity-guarded snap onto the measured surface.
+    // This is the only ground collision in the game; there are no separate
+    // platforms that could sit somewhere the level art does not show.
     sonic.onGround = false;
-    const sonicCenterX = sonic.x + sonic.width / 2;
-    const groundLevel = getGroundLevel(sonicCenterX);
+    const groundLevel = getGroundLevel(sonic.x + sonic.width / 2);
 
     if (sonic.velocityY >= 0 && sonic.y + sonic.height >= groundLevel) {
         sonic.y = groundLevel - sonic.height;
@@ -589,68 +621,45 @@ function update() {
         sonic.onGround = true;
         sonic.canDoubleJump = false;
     }
-    
-    // Additional platform collision for scattered platforms
-    const scatteredPlatforms = [
-        {x: 1100, y: 350, width: 150, height: 40},
-        {x: 1800, y: 330, width: 180, height: 40},
-        {x: 2600, y: 340, width: 200, height: 40},
-        {x: 3400, y: 335, width: 170, height: 40},
-        {x: 4200, y: 360, width: 150, height: 40}
-    ];
-    
-    for (let platform of scatteredPlatforms) {
-        if (sonic.x + sonic.width > platform.x &&
-            sonic.x < platform.x + platform.width &&
-            sonic.y + sonic.height > platform.y &&
-            sonic.y < platform.y + platform.height) {
-            
-            if (sonic.velocityY >= 0 &&
-                sonic.y + sonic.height - sonic.velocityY <= platform.y + 4) {
-                sonic.y = platform.y - sonic.height;
-                sonic.velocityY = 0;
-                sonic.onGround = true;
-                sonic.canDoubleJump = false;
-            }
-        }
-    }
-    
-    // Keep Sonic in bounds
-    if (sonic.x < 0) {
-        sonic.x = 0;
-        sonic.velocityX = 0;
-        sonic.isRolling = false;
-    }
-    
-    // Reset if Sonic falls off screen
-    if (sonic.y > canvas.height + 100) {
-        sonic.x = 100;
-        sonic.y = 441;
+
+    // Reset if Sonic somehow ends up below the level
+    if (sonic.y > LEVEL_HEIGHT + 100) {
+        sonic.x = 80;
+        sonic.y = getGroundLevel(sonic.x + sonic.width / 2) - sonic.height;
         sonic.velocityX = 0;
         sonic.velocityY = 0;
         sonic.isSpinDashing = false;
         sonic.isRolling = false;
         sonic.spinDashCharge = 0;
     }
-    
-    // Camera follows Sonic
-    camera.x = sonic.x - canvas.width / 2;
-    if (camera.x < 0) camera.x = 0;
-    
-    // Update badniks
+
+    // Camera follows Sonic, clamped to the level the art actually covers. The
+    // level is exactly one canvas tall, so it never scrolls vertically.
+    camera.x = Math.min(Math.max(sonic.x - canvas.width / 2, 0), Math.max(0, LEVEL_WIDTH - canvas.width));
+
+    // Badniks walk the same measured surface, and turn at cliffs rather than
+    // strolling off into the water.
     for (let badnik of badniks) {
         if (!badnik.destroyed) {
-            badnik.x += badnik.velocityX;
-            
-            if (Math.abs(badnik.x - badnik.startX) > badnik.patrolDistance) {
+            // Both limits are tested against where the step *would* land, so the
+            // badnik turns before stepping out rather than flipping in place.
+            const nextX = badnik.x + badnik.velocityX;
+            const leavingPatrol = Math.abs(nextX - badnik.startX) > badnik.patrolDistance;
+            const leavingGround = Math.abs(getGroundLevel(nextX + badnik.width / 2) -
+                                           getGroundLevel(badnik.x + badnik.width / 2)) > MAX_STEP;
+
+            if (leavingPatrol || leavingGround) {
                 badnik.velocityX *= -1;
                 badnik.direction *= -1;
+            } else {
+                badnik.x = nextX;
             }
-            
+
+            badnik.y = getGroundLevel(badnik.x + badnik.width / 2) - badnik.height;
             badnik.animationFrame += badnik.animationSpeed;
         }
     }
-    
+
     // Collision detection
     if (!sonic.isHurt) {
         for (let badnik of badniks) {
@@ -698,9 +707,9 @@ function update() {
     // Ring collection
     for (let ring of rings) {
         if (!ring.collected) {
-            if (sonic.x < ring.x + 24 &&
+            if (sonic.x < ring.x + ring.size &&
                 sonic.x + sonic.width > ring.x &&
-                sonic.y < ring.y + 24 &&
+                sonic.y < ring.y + ring.size &&
                 sonic.y + sonic.height > ring.y) {
                 
                 ring.collected = true;
@@ -790,78 +799,75 @@ function renderIntro() {
     ctx.fillText('Press ENTER to Start', canvas.width / 2, canvas.height - 50);
 }
 
+// Traces the collision surface along the top of the terrain. Used as the
+// fallback terrain fill when the level art fails to load, and — with G held —
+// as an overlay for checking that the surface follows the drawn ground.
+function traceGroundPath() {
+    ctx.beginPath();
+    ctx.moveTo(0, GROUND_HEIGHTMAP[0] * LEVEL_SCALE);
+    for (let column = 1; column < LEVEL_IMAGE_WIDTH; column++) {
+        ctx.lineTo(column * LEVEL_SCALE, GROUND_HEIGHTMAP[column] * LEVEL_SCALE);
+    }
+    ctx.lineTo(LEVEL_WIDTH, GROUND_HEIGHTMAP[LEVEL_IMAGE_WIDTH - 1] * LEVEL_SCALE);
+}
+
+function drawHeightmapSilhouette() {
+    ctx.fillStyle = '#2401b7';
+    ctx.fillRect(0, 0, LEVEL_WIDTH, LEVEL_HEIGHT);
+
+    ctx.fillStyle = '#3d9b00';
+    traceGroundPath();
+    ctx.lineTo(LEVEL_WIDTH, LEVEL_HEIGHT);
+    ctx.lineTo(0, LEVEL_HEIGHT);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function drawGroundLine() {
+    ctx.save();
+    ctx.strokeStyle = '#FF00FF';
+    ctx.lineWidth = 3;
+    traceGroundPath();
+    ctx.stroke();
+    ctx.restore();
+}
+
 function renderGame() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
+
+    ctx.imageSmoothingEnabled = false;
+
     ctx.save();
     ctx.translate(-camera.x, -camera.y);
-    
-    // Draw background
-    if (images.background) {
-        ctx.save();
-        ctx.translate(camera.x * 0.2, camera.y * 0.2);
-        
-        const bgWidth = 320;
-        const parallaxX = camera.x * 0.2;
-        const offsetX = -(parallaxX % bgWidth);
-        
-        const tilesNeeded = Math.ceil(LEVEL_WIDTH / bgWidth) + 2;
-        for (let i = 0; i < tilesNeeded; i++) {
-            ctx.drawImage(images.background, offsetX + i * bgWidth, 0, bgWidth, 240);
-        }
-        ctx.restore();
-    }
-    
-    // Draw terrain
-    const terrainWidth = 320;
-    const offsetX = -(camera.x % terrainWidth);
-    const terrainTilesNeeded = Math.ceil(LEVEL_WIDTH / terrainWidth) + 2;
-    
-    if (images.terrain1) {
-        for (let i = 0; i < terrainTilesNeeded; i++) {
-            ctx.drawImage(images.terrain1, offsetX + i * terrainWidth, 320, terrainWidth, 240);
-        }
-    }
-    
-    if (images.terrain2) {
-        for (let i = 0; i < terrainTilesNeeded; i++) {
-            const globalTileIndex = Math.floor(camera.x / terrainWidth) + i;
 
-            if (getGroundTileType(globalTileIndex) === 'cliff') {
-                ctx.save();
-                ctx.globalAlpha = 0.9;
-                ctx.drawImage(images.terrain2, offsetX + i * terrainWidth, 300, terrainWidth, 240);
-                ctx.restore();
-            }
-        }
+    // Terrain. The level art is drawn once, whole, scaled by exactly the same
+    // LEVEL_SCALE that getGroundLevel() applies to the heightmap read off it —
+    // so the ground Sonic collides with is the ground on screen.
+    if (images.level) {
+        ctx.drawImage(images.level, 0, 0, LEVEL_WIDTH, LEVEL_HEIGHT);
+    } else {
+        drawHeightmapSilhouette();
     }
 
-    if (images.terrain3) {
-        for (let i = 0; i < terrainTilesNeeded; i++) {
-            const globalTileIndex = Math.floor(camera.x / terrainWidth) + i;
-
-            if (getGroundTileType(globalTileIndex) === 'hill') {
-                ctx.save();
-                ctx.globalAlpha = 0.85;
-                ctx.drawImage(images.terrain3, offsetX + i * terrainWidth, 310, terrainWidth, 240);
-                ctx.restore();
-            }
-        }
+    // Hold G to see the collision surface drawn over the art it was read from.
+    if (keys['KeyG']) {
+        drawGroundLine();
     }
-    
+
     // Draw rings
     if (images.ring) {
         for (let ring of rings) {
             if (!ring.collected) {
+                const half = ring.size / 2;
                 ctx.save();
-                ctx.translate(ring.x + 12, ring.y + 12);
+                ctx.translate(ring.x + half, ring.y + half);
                 ctx.rotate(ring.animationFrame);
-                ctx.drawImage(images.ring, -12, -12, 24, 24);
+                ctx.drawImage(images.ring, -half, -half, ring.size, ring.size);
                 ctx.restore();
             }
         }
     }
-    
+
     // Draw badniks
     for (let badnik of badniks) {
         if (!badnik.destroyed) {
