@@ -104,7 +104,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 23;
+const totalAssets = 24;
 
 // Game states
 let currentGameState = 'loading';
@@ -216,12 +216,22 @@ function playSonicHurtSound() {
     setTimeout(() => playSound(392, 0.12, 'square', 0.15), 100);
 }
 
+// A bright shower that falls away, so you hear the rings leave rather than a
+// single blip. Pitches slide down as they scatter.
 function playRingScatterSound() {
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
         setTimeout(() => {
-            playSound(988 + i * 100, 0.03, 'sine', 0.1);
-        }, i * 30);
+            playSound(1760 - i * 110, 0.05, 'sine', 0.11 - i * 0.008);
+            playSound(2640 - i * 150, 0.03, 'triangle', 0.05);
+        }, i * 35);
     }
+}
+
+function playSonicDeathSound() {
+    playSound(392, 0.18, 'square', 0.2);
+    setTimeout(() => playSound(330, 0.18, 'square', 0.18), 140);
+    setTimeout(() => playSound(262, 0.3, 'square', 0.16), 300);
+    setTimeout(() => playSound(196, 0.5, 'sawtooth', 0.14), 520);
 }
 
 function playLevelCompleteSound() {
@@ -262,6 +272,7 @@ const assetPaths = {
     sonicLanding: 'FullAssets/Sonic-Poses/Sonic-Landing.png',
     sonicBalancing: 'FullAssets/Sonic-Poses/Sonic-Balancing.png',
     sonicCrouch: 'FullAssets/Sonic-Poses/Sonic-Crouch.png',
+    sonicDead: 'assets/Sonic-Dead.png',
     ring: 'assets/Ring.png',
     spring: 'FullAssets/Accessories/Spring.png',
     plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
@@ -440,7 +451,9 @@ let sonic = {
     pose: 'idle',
     onLoop: null,
     loopBlocked: null,
-    spriteAngle: 0
+    spriteAngle: 0,
+    isDead: false,
+    deathTimer: 0
 };
 
 // Which sprite each pose draws with. Rising and falling get their own poses, so
@@ -453,6 +466,7 @@ const POSE_SPRITES = {
     land: 'sonicLanding',
     balance: 'sonicBalancing',
     crouch: 'sonicCrouch',
+    dead: 'sonicDead',
     run: 'sonicRun',
     idle: 'sonicIdle'
 };
@@ -482,6 +496,7 @@ function isOnEdge() {
 }
 
 function choosePose() {
+    if (sonic.isDead) return 'dead';
     if (sonic.onLoop) return 'crouch';          // tucked low, riding the rail
     if (sonic.isHurt) return 'hurt';
     if (sonic.isSpinDashing || sonic.isRolling) return 'spin';
@@ -761,17 +776,89 @@ function updateLoopRide() {
     sonic.onGround = true;
 }
 
-// Shared by badniks and spikes so a hit costs the same either way.
-function hurtSonic(knockbackDirection) {
-    console.log('Sonic hurt!');
+// Rings knocked loose by a hit. They burst out, bounce off the measured ground
+// and can be grabbed back — the ones that stop rolling stay lying where the hit
+// happened until they time out.
+let lostRings = [];
 
+const LOST_RING_LIMIT = 24;         // how many are drawn, however many were lost
+const LOST_RING_LIFE = 420;         // ~7 seconds before they wink out
+const LOST_RING_BLINK = 90;         // frames of blinking before that
+const LOST_RING_ARM = 40;           // frames before Sonic can pick them back up
+
+function scatterLostRings(count, centerX, centerY) {
+    const size = worldSize(1);
+    const shown = Math.min(count, LOST_RING_LIMIT);
+
+    for (let i = 0; i < shown; i++) {
+        // Fan them right round, with alternating rings thrown harder so the
+        // burst has two rows to it rather than one flat ring.
+        const angle = (Math.PI * 2 * i) / shown;
+        const power = (i % 2 === 0 ? 7 : 4.5);
+
+        lostRings.push({
+            x: centerX - size / 2,
+            y: centerY - size / 2,
+            velocityX: Math.cos(angle) * power,
+            velocityY: Math.sin(angle) * power - 3,     // biased upward
+            size: size,
+            life: LOST_RING_LIFE,
+            arm: LOST_RING_ARM,
+            animationFrame: Math.random() * Math.PI
+        });
+    }
+}
+
+function updateLostRings() {
+    for (const ring of lostRings) {
+        ring.velocityY += GRAVITY * 0.5;
+        ring.x += ring.velocityX;
+        ring.y += ring.velocityY;
+
+        const ground = getGroundLevel(ring.x + ring.size / 2);
+        if (ring.velocityY > 0 && ring.y + ring.size >= ground) {
+            ring.y = ground - ring.size;
+            ring.velocityY *= -0.55;                     // bounce, losing height
+            ring.velocityX *= 0.8;
+            if (Math.abs(ring.velocityY) < 1.5) {        // came to rest
+                ring.velocityY = 0;
+                ring.velocityX = 0;
+            }
+        }
+
+        ring.animationFrame += 0.2;
+        if (ring.arm > 0) ring.arm--;
+        ring.life--;
+
+        // Only the arming delay gates a pickup. Gating on the hurt flash too
+        // would lock them away for the full 120-frame invulnerability.
+        if (ring.arm === 0 && !sonic.isDead &&
+            sonic.x < ring.x + ring.size && sonic.x + sonic.width > ring.x &&
+            sonic.y < ring.y + ring.size && sonic.y + sonic.height > ring.y) {
+            ring.life = 0;
+            gameData.rings++;
+            playRingSound();
+        }
+    }
+
+    lostRings = lostRings.filter(ring => ring.life > 0);
+}
+
+// Shared by badniks and spikes so a hit costs the same either way. With no rings
+// left to lose there is nothing to cushion the hit, and Sonic dies.
+function hurtSonic(knockbackDirection) {
     sonic.onLoop = null;                        // knocked off the track
     sonic.spriteAngle = 0;
 
-    if (gameData.rings > 0) {
-        gameData.rings = Math.max(0, gameData.rings - 10);
-        playRingScatterSound();
+    if (gameData.rings <= 0) {
+        killSonic();
+        return;
     }
+
+    console.log('Sonic hurt - rings scattered!');
+    scatterLostRings(gameData.rings, sonic.x + sonic.width / 2, sonic.y + sonic.height / 2);
+    gameData.rings = 0;
+    playRingScatterSound();
 
     sonic.isHurt = true;
     sonic.hurtTimer = sonic.invulnerabilityTime;
@@ -781,6 +868,35 @@ function hurtSonic(knockbackDirection) {
     sonic.velocityY = -6;
 
     playSonicHurtSound();
+}
+
+// Death: the hop, then a fall clean through the floor, then back to the start
+// of the level with the music from the top.
+function killSonic() {
+    console.log('Sonic died');
+    sonic.isDead = true;
+    sonic.deathTimer = 160;
+    sonic.velocityX = 0;
+    sonic.velocityY = -15;
+    sonic.isHurt = false;
+    sonic.hurtTimer = 0;
+    sonic.isSpinDashing = false;
+    sonic.isRolling = false;
+    sonic.spinDashCharge = 0;
+    sonic.onGround = false;
+    stopChargingSound();
+    music.pause();
+    playSonicDeathSound();
+}
+
+function updateDeath() {
+    sonic.velocityY += GRAVITY;
+    sonic.y += sonic.velocityY;                 // no ground to catch him
+    sonic.deathTimer--;
+
+    if (sonic.deathTimer <= 0 || sonic.y > LEVEL_BOTTOM + 200) {
+        initializeGame();
+    }
 }
 
 // Initialize game world
@@ -879,6 +995,9 @@ function initializeGame() {
     sonic.onLoop = null;
     sonic.loopBlocked = null;
     sonic.spriteAngle = 0;
+    sonic.isDead = false;
+    sonic.deathTimer = 0;
+    lostRings = [];
 
     // Reset game state
     gameData.rings = 0;
@@ -1120,12 +1239,17 @@ function updateOnFoot() {
 
 // Main game update loop
 function update() {
-    if (planeMode) {
+    if (sonic.isDead) {
+        updateDeath();
+        Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
+    } else if (planeMode) {
         updatePlane();
         Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
     } else {
         updateOnFoot();
     }
+
+    updateLostRings();
 
     // Camera follows Sonic, clamped to what the paintings actually cover. The
     // chained level is only a little taller than the canvas, so the vertical
@@ -1158,7 +1282,7 @@ function update() {
     }
 
     // Collision detection
-    if (!sonic.isHurt) {
+    if (!sonic.isHurt && !sonic.isDead) {
         for (let badnik of badniks) {
             if (!badnik.destroyed) {
                 if (sonic.x < badnik.x + badnik.width &&
@@ -1191,11 +1315,12 @@ function update() {
     // Ring collection
     for (let ring of rings) {
         if (!ring.collected) {
-            if (sonic.x < ring.x + ring.size &&
+            if (!sonic.isDead &&
+                sonic.x < ring.x + ring.size &&
                 sonic.x + sonic.width > ring.x &&
                 sonic.y < ring.y + ring.size &&
                 sonic.y + sonic.height > ring.y) {
-                
+
                 ring.collected = true;
                 gameData.rings++;
                 playRingSound();
@@ -1207,7 +1332,7 @@ function update() {
     
     // Check level end sign. Passing the post is what counts, at any height —
     // otherwise a springboard flight sails straight over the goal.
-    if (levelEndSign && !levelEndSign.crossed &&
+    if (levelEndSign && !levelEndSign.crossed && !sonic.isDead &&
         sonic.x + sonic.width / 2 > levelEndSign.x + levelEndSign.width / 2) {
 
         levelEndSign.crossed = true;
@@ -1428,6 +1553,20 @@ function renderGame() {
                 ctx.drawImage(images.ring, -half, -half, ring.size, ring.size);
                 ctx.restore();
             }
+        }
+    }
+
+    // Draw the rings knocked loose by a hit, blinking as they run out of time
+    if (images.ring) {
+        for (const ring of lostRings) {
+            if (ring.life < LOST_RING_BLINK && Math.floor(ring.life / 4) % 2 === 0) continue;
+
+            const half = ring.size / 2;
+            ctx.save();
+            ctx.translate(ring.x + half, ring.y + half);
+            ctx.rotate(ring.animationFrame);
+            ctx.drawImage(images.ring, -half, -half, ring.size, ring.size);
+            ctx.restore();
         }
     }
 
