@@ -34,31 +34,57 @@ const ctx = canvas.getContext('2d');
 const LEVEL_TILE = 40;              // world pixels per source grass band
 const LEVEL_ASSET_DIR = 'FullAssets/Levels-Flattened-Layer/';
 
-const LEVEL_SEGMENTS = [
-    { key: 'levelA', file: 'Level-.png',                        imageWidth: 512,  imageHeight: 257,  band: 17 },
-    { key: 'level2', file: 'Level-2.png',                       imageWidth: 419,  imageHeight: 350,  band: 41 },
-    { key: 'level3', file: 'Level-3.png',                       imageWidth: 1808, imageHeight: 1288, band: 93 },
-    { key: 'loop',   file: 'Level-With_Loop.png',                imageWidth: 530,  imageHeight: 359,  band: 17 },
-    { key: 'spikes', file: 'Level-With_Spikes-Springboard.png', imageWidth: 875,  imageHeight: 428,  band: 31 }
+// The paintings themselves, each measured once.
+const LEVEL_ART = {
+    levelA: { file: 'Level-.png',                        imageWidth: 512,  imageHeight: 257,  band: 17 },
+    level2: { file: 'Level-2.png',                       imageWidth: 419,  imageHeight: 350,  band: 41 },
+    level3: { file: 'Level-3.png',                       imageWidth: 1808, imageHeight: 1288, band: 93 },
+    loop:   { file: 'Level-With_Loop.png',               imageWidth: 530,  imageHeight: 359,  band: 17 },
+    spikes: { file: 'Level-With_Spikes-Springboard.png', imageWidth: 875,  imageHeight: 428,  band: 31 }
+};
+
+// The route through them. A painting may appear as often as it likes — each
+// entry becomes its own segment, sharing the art and heightmap but placed at its
+// own spot in the chain. The order avoids putting a painting next to itself, and
+// finishes on Level-2, whose flat field is the arena for a boss.
+//
+// The drifts very nearly cancel over a pass (levelA +167, loop +125, spikes -283,
+// level3 -30, level2 +9 = -12), so the world stays level however long it runs
+// rather than sliding steadily downhill.
+const LEVEL_ORDER = [
+    'levelA', 'level3', 'loop', 'spikes', 'level2',
+    'levelA', 'loop', 'level3', 'spikes', 'level2',
+    'levelA', 'level3', 'loop', 'spikes', 'level2'
 ];
+
+const LEVEL_SEGMENTS = [];
 
 // Lay the segments out: scale each by its own grass band, place it after the
 // previous one, and shift it vertically so the ground flows across the seam.
 function buildLevel() {
     let x = 0;
     let previousGroundY = null;
+    const seen = {};
 
-    for (const segment of LEVEL_SEGMENTS) {
-        segment.heightmap = LEVEL_HEIGHTMAPS[segment.key];
-        segment.scale = LEVEL_TILE / segment.band;
-        segment.width = segment.imageWidth * segment.scale;
-        segment.height = segment.imageHeight * segment.scale;
-        segment.x = x;
-        segment.y = previousGroundY === null
-            ? 0
-            : previousGroundY - segment.heightmap[0] * segment.scale;
+    for (const art of LEVEL_ORDER) {
+        seen[art] = (seen[art] || 0) + 1;
+        const source = LEVEL_ART[art];
+        const heightmap = LEVEL_HEIGHTMAPS[art];
+        const scale = LEVEL_TILE / source.band;
 
-        previousGroundY = segment.y + segment.heightmap[segment.heightmap.length - 1] * segment.scale;
+        const segment = {
+            art: art,
+            id: `${art}#${seen[art]}`,
+            heightmap: heightmap,
+            scale: scale,
+            width: source.imageWidth * scale,
+            height: source.imageHeight * scale,
+            x: x,
+            y: previousGroundY === null ? 0 : previousGroundY - heightmap[0] * scale
+        };
+
+        LEVEL_SEGMENTS.push(segment);
+        previousGroundY = segment.y + heightmap[heightmap.length - 1] * scale;
         x += segment.width;
     }
 
@@ -72,12 +98,7 @@ function buildLevel() {
 
 const LEVEL_WIDTH = buildLevel();
 const LEVEL_BOTTOM = Math.max(...LEVEL_SEGMENTS.map(s => s.y + s.height));
-
-// An x position measured from the start of a named segment, so inserting a new
-// painting earlier in the chain does not silently move everything after it.
-function atSegment(key, offsetX) {
-    return LEVEL_SEGMENTS.find(s => s.key === key).x + offsetX;
-}
+const LAST_SEGMENT = LEVEL_SEGMENTS[LEVEL_SEGMENTS.length - 1];
 
 function segmentAt(worldX) {
     for (let i = LEVEL_SEGMENTS.length - 1; i > 0; i--) {
@@ -286,9 +307,9 @@ const assetPaths = {
 };
 
 // The level paintings are both the terrain graphics and the source of the
-// heightmaps, so they load under the same keys their segments are named by.
-for (const segment of LEVEL_SEGMENTS) {
-    assetPaths[segment.key] = LEVEL_ASSET_DIR + segment.file;
+// heightmaps. Loaded once per painting, however many segments reuse it.
+for (const [art, source] of Object.entries(LEVEL_ART)) {
+    assetPaths[art] = LEVEL_ASSET_DIR + source.file;
 }
 
 // Load all assets
@@ -394,7 +415,9 @@ document.addEventListener('keydown', (e) => {
         initializeGame();
     }
 
-    if (currentGameState === 'playing' && e.code === 'KeyT') {
+    // Numpad 0 sits right beside the arrow cluster, so the whole game can be
+    // played one-handed. T does the same thing for anyone without a numpad.
+    if (currentGameState === 'playing' && (e.code === 'KeyT' || e.code === 'Numpad0')) {
         setPlaneMode(!planeMode);
     }
 
@@ -517,6 +540,9 @@ const TERMINAL_VELOCITY = 28;
 // A rise in the ground bigger than this is a wall, not a step Sonic walks up.
 const MAX_STEP = 24;
 
+// Spin dash launch speeds, across the whole charge range, wound up by this much.
+const SPIN_DASH_BOOST = 1.7;
+
 // ---------------------------------------------------------------------------
 // TORNADO MODE (press T)
 //
@@ -566,10 +592,12 @@ function setPlaneMode(on) {
     console.log(on ? '✈️ Tornado mode' : '🏃 Back on foot');
 }
 
-// Constant forward cruise; the arrows only point the nose up or down.
+// Constant cruise. Left and right turn the plane around — it then flies that
+// way at the same speed — while up and down point the nose.
 function updatePlane() {
-    sonic.direction = 1;
-    sonic.velocityX = PLANE_SPEED;
+    if (keys['ArrowLeft'] || keys['KeyA']) sonic.direction = -1;
+    if (keys['ArrowRight'] || keys['KeyD']) sonic.direction = 1;
+    sonic.velocityX = PLANE_SPEED * sonic.direction;
 
     let climb = 0;
     if (keys['ArrowUp'] || keys['KeyW']) climb -= 1;
@@ -589,55 +617,115 @@ let rings = [];
 let badniks = [];
 let levelEndSign = null;
 
-// The goal sits on the low ground just before the final tower, which is a 406px
-// rise — taller than a jump. Reaching its top is an optional double-jump stunt,
-// never something the player has to do to finish.
-const LEVEL_END_X = atSegment('spikes', 918);
+// The goal is at the far end of the last painting, on Level-2's flat field.
+const LEVEL_END_X = LAST_SEGMENT.x + LAST_SEGMENT.width - worldSize(4);
 
-// Things painted into the level art get their boxes in the image pixels of the
-// segment they belong to, converted through that segment's own scale — the same
-// one the terrain is drawn with. Measured off the art, they stay pinned to it.
-function fromArt(segmentKey, imageX, imageY, imageWidth, imageHeight) {
-    const segment = LEVEL_SEGMENTS.find(s => s.key === segmentKey);
+const SPRING_SPRITE_SIZE = { width: worldSize(1.4), height: worldSize(0.8) };
+
+// ---------------------------------------------------------------------------
+// Things that belong to a painting rather than to a place in the level. Boxes
+// are given in that painting's own image pixels, so every time the painting
+// appears in LEVEL_ORDER it brings its spikes, springs and loop along with it.
+// ---------------------------------------------------------------------------
+const ART_FEATURES = {
+    spikes: {
+        // The row of spikes at the foot of the waterfall. These hurt however you
+        // touch them — rolling through does not save you.
+        hazards: [{ x: 197, y: 322, width: 88, height: 34 }],
+        springs: [
+            // The red springboard painted into the art, pointing up and right.
+            // Launch is capped by headroom: 20 puts the apex just under the top
+            // of the view, which is as high as Sonic can go and stay on screen.
+            { x: 598, y: 176, width: 61, height: 19, launch: 20, push: 14 },
+            // Ours, on the ledge above the spike pit. Angled forward on purpose:
+            // a purely vertical bounce would drop a slow-moving Sonic straight
+            // into the spikes, whereas the push clears them at any speed.
+            { groundX: 148, launch: 20, push: 8, sprite: 'spring' },
+            // At the foot of the tower this painting ends on. That tower is a
+            // 394px wall in its last 55px — fine when the painting was last in
+            // the chain, impassable now that the level carries on past it. The
+            // bounce is straight up so Sonic rises against the face and slides
+            // over the top rather than being thrown into it.
+            { groundX: 1020, launch: 30, push: 0, sprite: 'spring' }
+        ],
+        badniks: [168, 338, 868],
+        ringArcs: [[198, 438], [638, 818]]
+    },
+    loop: {
+        // Fitted to the two parts of the drawing that can be measured cleanly:
+        // the inner ceiling, whose highest point sits at image x 388 y 123, and
+        // the floor at y 298 — centre (386, 210), radius 88.
+        loops: [{ cx: 386, cy: 210, radius: 88 }],
+        // The flat top of the loop block: solid, but far above the ground the
+        // heightmap describes. One-way, landed on from above only.
+        platforms: [{ x: 258, y: 105, width: 262, height: 10 }],
+        badniks: [320, 1150],
+        ringArcs: [[640, 1060]]
+    },
+    levelA: {
+        badniks: [300, 460, 800],
+        ringArcs: [[200, 560], [1000, 1160]]
+    },
+    level3: {
+        badniks: [145, 445, 695],
+        ringArcs: [[245, 545]]
+    },
+    level2: {
+        badniks: [200],
+        ringArcs: []
+    }
+};
+
+const featuresFor = (segment) => ART_FEATURES[segment.art] || {};
+
+// Image pixels of a segment's painting -> world box, through that segment's own
+// scale: the same one the terrain is drawn with, so it stays pinned to the art.
+function fromArt(segment, box) {
     return {
-        x: segment.x + imageX * segment.scale,
-        y: segment.y + imageY * segment.scale,
-        width: imageWidth * segment.scale,
-        height: imageHeight * segment.scale
+        x: segment.x + box.x * segment.scale,
+        y: segment.y + box.y * segment.scale,
+        width: box.width * segment.scale,
+        height: box.height * segment.scale
     };
 }
 
-// The row of spikes at the foot of the waterfall in Level-With_Spikes-Springboard.png.
-// Spikes hurt however you touch them — rolling through does not save you.
-const HAZARDS = [
-    fromArt('spikes', 197, 322, 88, 34)
-];
+const HAZARDS = [];
+const SPRINGS = [];
+const LOOPS = [];
+const PLATFORMS = [];
 
-// The red springboard painted into that same level points up and to the right,
-// so it throws Sonic forward as well as upward. The second spring is one we add
-// ourselves, drawn with Accessories/Spring.png, offering a way over the spikes.
-const SPRING_SPRITE_SIZE = { width: worldSize(1.4), height: worldSize(0.8) };
+for (const segment of LEVEL_SEGMENTS) {
+    const features = featuresFor(segment);
 
-// Launch strength is capped by headroom, not taste: the springboard's deck sits
-// at world y 312 and the world ends at 0, so 20 puts the apex at y 16 — right
-// under the top of the view, which is as high as Sonic can go and stay on screen.
-const SPRINGS = [
-    Object.assign(fromArt('spikes', 598, 176, 61, 19), { launch: 20, push: 14 }),
-    {
-        // On the ledge above the spike pit, far enough back that the whole
-        // footprint is on flat ground. It is angled forward on purpose: a purely
-        // vertical bounce would drop a slow-moving Sonic straight into the
-        // spikes, whereas the push makes the arc clear them whatever speed he
-        // arrives at.
-        x: atSegment('spikes', 148),
-        y: 0,                                   // dropped onto the ground below
-        width: SPRING_SPRITE_SIZE.width,
-        height: SPRING_SPRITE_SIZE.height,
-        launch: 20,
-        push: 8,
-        sprite: 'spring'
+    for (const box of features.hazards || []) HAZARDS.push(fromArt(segment, box));
+    for (const box of features.platforms || []) PLATFORMS.push(fromArt(segment, box));
+
+    for (const circle of features.loops || []) {
+        LOOPS.push({
+            cx: segment.x + circle.cx * segment.scale,
+            cy: segment.y + circle.cy * segment.scale,
+            radius: circle.radius * segment.scale
+        });
     }
-];
+
+    for (const spring of features.springs || []) {
+        // Two kinds: one traced off the painting in image pixels, and one we
+        // place ourselves at a world offset and drop onto the ground.
+        const placed = spring.groundX !== undefined
+            ? {
+                x: segment.x + spring.groundX,
+                y: 0,
+                width: SPRING_SPRITE_SIZE.width,
+                height: SPRING_SPRITE_SIZE.height
+            }
+            : fromArt(segment, spring);
+
+        placed.launch = spring.launch;
+        placed.push = spring.push;
+        placed.sprite = spring.sprite;
+        SPRINGS.push(placed);
+    }
+}
 
 for (const spring of SPRINGS) {
     if (spring.sprite) spring.y = getGroundLevel(spring.x + spring.width / 2) - spring.height;
@@ -663,21 +751,6 @@ for (const spring of SPRINGS) {
 // arc, and a least-squares fit swings between radius 88 and 126 depending on
 // which columns you feed it.
 // ---------------------------------------------------------------------------
-function loopFromArt(segmentKey, centreX, centreY, radius) {
-    const segment = LEVEL_SEGMENTS.find(s => s.key === segmentKey);
-    return {
-        cx: segment.x + centreX * segment.scale,
-        cy: segment.y + centreY * segment.scale,
-        radius: radius * segment.scale
-    };
-}
-
-// Fitted to the two parts of the drawing that can be measured cleanly: the
-// inner ceiling, whose highest point sits at image x 388 y 123, and the floor
-// at y 298. That puts the centre at (386, 210) with radius 88 — noticeably
-// right of the hole's apparent middle, which is why the rail lines up now.
-const LOOPS = [loopFromArt('loop', 386, 210, 88)];
-
 // Below this Sonic cannot hold the inside of the loop and simply runs past it.
 // A plain run (speed 6) just makes it; walking out of a spin dash flies round.
 const LOOP_MIN_SPEED = 5;
@@ -690,13 +763,6 @@ const LOOP_RIDE_SPEED = [14, 28];       // min, max
 // A visible rail, drawn on the circle Sonic actually rides.
 const RAIL_THICKNESS = Math.round(worldSize(2.4) * 0.2);
 const RAIL_COLOR = '#39FF14';
-
-// The flat top of the loop block, which is solid but sits high above the ground
-// the heightmap describes — the second surface at the same x that the heightmap
-// has no way to hold. One-way: you land on it from above, never from below.
-const PLATFORMS = [
-    fromArt('loop', 258, 105, 262, 10)
-];
 
 const overlaps = (a, b) =>
     a.x < b.x + b.width && a.x + a.width > b.x &&
@@ -904,7 +970,7 @@ function initializeGame() {
     console.log('Initializing game...');
     
     // Rings ride the measured ground, so they hug whatever the art actually does
-    // across all three segments instead of hanging at hand-tuned coordinates.
+    // rather than hanging at hand-tuned coordinates.
     const ringSize = worldSize(1);
     rings = [];
     const addRing = (x, y, phase) => rings.push({
@@ -917,37 +983,33 @@ function initializeGame() {
     }
 
     // Arcs tempting a jump over the water pits, the jungle dip, the inside of
-    // the loop and the climb up into the block towers. Anything past the first
-    // two paintings is measured from its own segment so the chain can be
-    // reordered without every arc drifting.
-    [
-        { start: 200, end: 560 },
-        { start: 1000, end: 1160 },
-        { start: atSegment('level3', 245), end: atSegment('level3', 545) },
-        { start: atSegment('loop', 640), end: atSegment('loop', 1060) },
-        { start: atSegment('spikes', 198), end: atSegment('spikes', 438) },
-        { start: atSegment('spikes', 638), end: atSegment('spikes', 818) }
-    ].forEach(gap => {
-        const span = gap.end - gap.start;
-        for (let i = 0; i <= 6; i++) {
-            const t = i / 6;
-            const x = gap.start + span * t;
-            addRing(x, getGroundLevel(x + ringSize / 2) - ringSize - 60 - Math.sin(t * Math.PI) * 150, i * 0.4);
+    // the loop and the climb into the block towers. Each painting carries its
+    // own arcs, so they repeat wherever that painting appears.
+    for (const segment of LEVEL_SEGMENTS) {
+        for (const [from, to] of featuresFor(segment).ringArcs || []) {
+            const start = segment.x + from;
+            const span = to - from;
+            for (let i = 0; i <= 6; i++) {
+                const t = i / 6;
+                const x = start + span * t;
+                addRing(x, getGroundLevel(x + ringSize / 2) - ringSize - 60 - Math.sin(t * Math.PI) * 150, i * 0.4);
+            }
         }
-    });
+    }
 
     // Badniks patrol the ledges and pit floors; their y is re-read from the
     // heightmap every frame in update(), so they walk on the drawn ground too.
     const badnikSize = worldSize(1.5);
     badniks = [];
-    [
-        { x: 300, type: 1 }, { x: 460, type: 2 }, { x: 800, type: 1 },
-        { x: atSegment('level3', 145), type: 2 }, { x: atSegment('level3', 445), type: 1 },
-        { x: atSegment('level3', 695), type: 2 },
-        { x: atSegment('loop', 320), type: 1 }, { x: atSegment('loop', 1150), type: 2 },
-        { x: atSegment('spikes', 168), type: 1 }, { x: atSegment('spikes', 338), type: 2 },
-        { x: atSegment('spikes', 868), type: 1 }
-    ].forEach(pos => {
+    const badnikSpots = [];
+    let badnikIndex = 0;
+    for (const segment of LEVEL_SEGMENTS) {
+        for (const offset of featuresFor(segment).badniks || []) {
+            badnikSpots.push({ x: segment.x + offset, type: (badnikIndex++ % 2) + 1 });
+        }
+    }
+
+    badnikSpots.forEach(pos => {
         badniks.push({
             x: pos.x,
             y: getGroundLevel(pos.x + badnikSize / 2) - badnikSize,
@@ -1039,7 +1101,11 @@ function updateOnFoot() {
     else if (sonic.isSpinDashing && sonic.onGround) {
         stopChargingSound();
 
-        const launchSpeed = (sonic.spinDashCharge / sonic.spinDashMaxCharge) * 15 + 8;
+        // The charge still scales the launch; the whole range is just wound up
+        // by SPIN_DASH_BOOST, because 8..23 did not cover enough ground to be
+        // worth stopping for. Rolling friction is unchanged, so a full charge
+        // now carries roughly 70% further as well as starting faster.
+        const launchSpeed = ((sonic.spinDashCharge / sonic.spinDashMaxCharge) * 15 + 8) * SPIN_DASH_BOOST;
         sonic.velocityX = launchSpeed * sonic.direction;
         sonic.isSpinDashing = false;
         sonic.isRolling = true;
@@ -1418,6 +1484,7 @@ function traceGroundPath() {
     ctx.beginPath();
     let started = false;
     for (const segment of LEVEL_SEGMENTS) {
+        if (segment.x + segment.width < camera.x || segment.x > camera.x + canvas.width) continue;
         const map = segment.heightmap;
         for (let column = 0; column < map.length; column++) {
             const x = segment.x + column * segment.scale;
@@ -1521,7 +1588,7 @@ function renderGame() {
             ctx.fillRect(segment.x, bottom, segment.width, LEVEL_BOTTOM - bottom);
         }
 
-        const art = images[segment.key];
+        const art = images[segment.art];
         if (art) {
             // Level-3 is a high-resolution painting being scaled down, where
             // nearest-neighbour just throws pixels away; the other two are chunky
@@ -1542,9 +1609,13 @@ function renderGame() {
         drawGroundLine();
     }
 
-    // Draw rings
+    // Draw rings. The level carries a few hundred of them now, so skip the ones
+    // off the sides of the view rather than transforming every single one.
     if (images.ring) {
+        const viewLeft = camera.x - 80;
+        const viewRight = camera.x + canvas.width + 80;
         for (let ring of rings) {
+            if (ring.x < viewLeft || ring.x > viewRight) continue;
             if (!ring.collected) {
                 const half = ring.size / 2;
                 ctx.save();
@@ -1668,14 +1739,15 @@ function drawSonic() {
     ctx.restore();
 }
 
-// The Tornado art faces left, so it is mirrored to fly right. The nose tips
-// with the climb so the plane leans into whichever way it is being steered.
+// The Tornado art faces left, so flying left needs no mirror and flying right
+// does. The nose tips with the climb, and the tilt flips with the heading so the
+// plane leans into the dive whichever way it is pointed.
 function drawPlane() {
     const art = images.plane;
     ctx.save();
     ctx.translate(sonic.x + sonic.width / 2, sonic.y + sonic.height / 2);
-    ctx.rotate((sonic.velocityY / PLANE_CLIMB) * 0.18);
-    ctx.scale(-1, 1);
+    ctx.rotate((sonic.velocityY / PLANE_CLIMB) * 0.18 * sonic.direction);
+    if (sonic.direction === 1) ctx.scale(-1, 1);
 
     if (art) {
         ctx.drawImage(art, -sonic.width / 2, -sonic.height / 2, sonic.width, sonic.height);
