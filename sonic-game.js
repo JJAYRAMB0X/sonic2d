@@ -128,7 +128,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 25;         // 20 sprites and sounds, plus 5 level paintings
+const totalAssets = 30;         // 25 sprites and sounds, plus 5 level paintings
 
 // Game states
 let currentGameState = 'loading';
@@ -297,6 +297,12 @@ const assetPaths = {
     sonicBalancing: 'FullAssets/Sonic-Poses/Sonic-Balancing.png',
     sonicCrouch: 'FullAssets/Sonic-Poses/Sonic-Crouch.png',
     sonicDead: 'assets/Sonic-Dead.png',
+    // Seaside Hill runs on the pose sheet rather than the Level 1 sprites.
+    sonicStanding: 'FullAssets/Sonic-Poses/Sonic-Standing.png',
+    sonicWalk1: 'FullAssets/Sonic-Poses/Sonic-Walking1.png',
+    sonicWalk2: 'FullAssets/Sonic-Poses/Sonic-Walking2.png',
+    sonicWalk3: 'FullAssets/Sonic-Poses/Sonic-Walking3.png',
+    monitor: 'FullAssets/Accessories/Accessory-MonitorEggman.png',
     ring: 'assets/Ring.png',
     spring: 'FullAssets/Accessories/Spring.png',
     plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
@@ -417,6 +423,16 @@ document.addEventListener('keydown', (e) => {
         currentGameState = 'playing';
         document.getElementById('loadingStatus').style.display = 'none';
         initializeGame();
+    }
+
+    // Jump straight to the second zone without replaying the first.
+    if (currentGameState === 'intro' && (e.code === 'Digit2' || e.code === 'Numpad2')) {
+        console.log('🌊 Starting Seaside Hill 26...');
+        currentGameState = 'seaside';
+        document.getElementById('loadingStatus').style.display = 'none';
+        gameData.rings = 0;
+        gameData.gameStartTime = Date.now();
+        Seaside.init();
     }
 
     // Numpad 0 sits right beside the arrow cluster, so the whole game can be
@@ -1589,9 +1605,12 @@ function update() {
 
         levelEndSign.crossed = true;
         playLevelCompleteSound();
-        
+
+        // Beating Eggman opens the way to the second zone.
         setTimeout(() => {
-            initializeGame();
+            music.pause();
+            currentGameState = 'seaside';
+            Seaside.init();
         }, 1500);
     }
     
@@ -1659,7 +1678,11 @@ function renderIntro() {
     if (Math.floor(elapsed / 500) % 2 === 0) {
         ctx.fillStyle = 'yellow';
     }
-    ctx.fillText('Press ENTER to Start', canvas.width / 2, canvas.height - 50);
+    ctx.fillText('Press ENTER to Start', canvas.width / 2, canvas.height - 62);
+
+    ctx.font = 'bold 16px Arial';
+    ctx.fillStyle = '#9fd8ff';
+    ctx.fillText('Press 2 for SEASIDE HILL 26', canvas.width / 2, canvas.height - 32);
 }
 
 const SKY_COLOR = '#1810bb';       // sampled from the paintings
@@ -2026,6 +2049,15 @@ function updateUI() {
 
 // Main game loop
 function gameLoop() {
+    if (currentGameState === 'seaside') {
+        Seaside.update();
+        Seaside.render();
+        updateUI();
+        Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
     if (currentGameState === 'playing') {
         update();
     }
