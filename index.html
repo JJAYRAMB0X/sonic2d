@@ -50,8 +50,29 @@
             left: 10px;
             color: white;
             font-size: 12px;
+            line-height: 1.5;
             text-shadow: 1px 1px 0px #000;
             z-index: 100;
+        }
+
+        /* Level select, top right. It grows downwards as zones are added, and
+           only shows on the title screen — in-game the corner belongs to the
+           zone's own HUD. */
+        #levelSelect {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: white;
+            font-size: 12px;
+            line-height: 1.5;
+            text-align: right;
+            text-shadow: 1px 1px 0px #000;
+            z-index: 100;
+        }
+
+        #levelSelect .heading {
+            color: #9fd8ff;
+            font-weight: bold;
         }
         
         .game-title {
@@ -87,10 +108,13 @@
             <div>RINGS: <span id="ringCount">0</span></div>
             <div>TIME: <span id="gameTime">0:00</span></div>
         </div>
-        <div id="controls">
-            ARROW KEYS: Move | SPACEBAR: Jump | DOWN ARROW: Spin Dash<br>
-            T or NUMPAD 0: Tornado plane (ARROWS to steer) | HOLD G: Show collision<br>
-            SEASIDE HILL: arrows run 8 ways &middot; SPACE jumps &middot; X charges a dash
+        <!-- Both of these are filled in by refreshScreenTips() in sonic-game.js,
+             so each screen only advertises the keys that do something on it. -->
+        <div id="controls"></div>
+        <div id="levelSelect">
+            <div class="heading">LEVEL SELECT</div>
+            <div>ENTER &mdash; GREENHILL ZONE 26</div>
+            <div>2 &mdash; SEASIDE HILL 26</div>
         </div>
         <div id="instructions">
             Level art: FullAssets/Levels-Flattened-Layer/<br>

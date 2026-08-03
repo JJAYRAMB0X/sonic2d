@@ -956,7 +956,7 @@ const Seaside = {
         // was landing underneath it.
         ctx.font = 'bold 13px Arial';
         ctx.fillStyle = '#bfe6ff';
-        ctx.fillText(this.planeMode ? 'TORNADO — T / NUMPAD 0 to land' : 'T / NUMPAD 0: Tornado   X: spin dash', canvas.width - 13, 45);
+        ctx.fillText(this.planeMode ? 'TORNADO — T/0 to land' : 'T/0: Tornado   X/Shift: spin dash', canvas.width - 13, 45);
         ctx.restore();
 
         if (this.completeTimer > 0) {

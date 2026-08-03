@@ -390,15 +390,115 @@ function startIntro() {
     console.log('✅ Intro screen ready - Sega audio should have played during loading');
 }
 
+// ---------------------------------------------------------------------------
+// On-page text. Bottom left carries the keys for whatever is on screen right
+// now — Level 1 never advertises Seaside's dash — and the top-right level list
+// belongs to the title screen alone, since in-game that corner is HUD.
+const CONTROL_TIPS = {
+    intro: 'ENTER: Start GREENHILL ZONE 26<br>' +
+           'ESC (in game): Pause menu, tips and restart',
+    playing: 'ARROW KEYS: Move | SPACEBAR: Jump | DOWN ARROW: Spin Dash<br>' +
+             'T/0: Tornado plane (ARROWS to steer) | HOLD G: Show collision<br>' +
+             'ESC: Pause menu',
+    seaside: 'ARROW KEYS: Run 8 ways | SPACEBAR: Jump | X/Shift: Spin Dash<br>' +
+             'T/0: Tornado plane (ARROWS to steer)<br>' +
+             'ESC: Pause menu'
+};
+
+let tipsShownFor = null;
+
+function refreshScreenTips() {
+    if (tipsShownFor === currentGameState) return;
+    tipsShownFor = currentGameState;
+
+    const controls = document.getElementById('controls');
+    const levels = document.getElementById('levelSelect');
+    const text = CONTROL_TIPS[currentGameState] || '';
+
+    controls.innerHTML = text;
+    controls.style.display = text ? 'block' : 'none';
+    levels.style.display = currentGameState === 'intro' ? 'block' : 'none';
+}
+
 // Camera system
 let camera = {
     x: 0,
     y: 0
 };
 
+// ---------------------------------------------------------------------------
+// Pause menu. Every zone's controls in one place — you can read Seaside's keys
+// without being in Seaside — plus the three ways out of a run.
+const PAUSE_TIPS = [
+    ['GREENHILL ZONE 26', [
+        'ARROW KEYS: Move',
+        'SPACEBAR: Jump (again in mid-air to double jump)',
+        'DOWN ARROW: Spin Dash (hold to charge, release to fire)',
+        'T/0: Tornado plane (ARROWS to steer)',
+        'HOLD G: Show collision'
+    ]],
+    ['SEASIDE HILL 26', [
+        'ARROW KEYS: Run eight ways',
+        'SPACEBAR: Jump',
+        'X/Shift: Spin Dash (hold to charge, arrows aim it)',
+        'T/0: Tornado plane (ARROWS to steer)'
+    ]]
+];
+
+const PAUSE_OPTIONS = ['RESUME', 'RESTART LEVEL', 'RESTART GAME', 'TITLE SCREEN'];
+
+let paused = false;
+let pauseIndex = 0;
+
 // Input handling
 const keys = {};
 const keysPressed = {};
+
+function setPaused(value) {
+    paused = value;
+    if (value) pauseIndex = 0;
+
+    // Whatever was held when the menu opened is let go of, so nothing is still
+    // pressed on the way back in and Sonic doesn't resume mid-stride.
+    Object.keys(keys).forEach(key => { keys[key] = false; });
+    Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
+}
+
+function applyPauseChoice() {
+    const choice = PAUSE_OPTIONS[pauseIndex];
+    const inSeaside = currentGameState === 'seaside';
+    setPaused(false);
+
+    if (choice === 'RESUME') return;
+
+    if (choice === 'RESTART LEVEL') {
+        if (inSeaside) Seaside.init(); else initializeGame();
+        return;
+    }
+
+    if (choice === 'RESTART GAME') {
+        Seaside.stopMusic();
+        currentGameState = 'playing';
+        initializeGame();                   // starts the first zone's music too
+        return;
+    }
+
+    // TITLE SCREEN
+    music.pause();
+    Seaside.stopMusic();
+    currentGameState = 'intro';
+    introStartTime = Date.now();
+}
+
+function handlePauseKey(code) {
+    if (code === 'ArrowUp' || code === 'KeyW') {
+        pauseIndex = (pauseIndex + PAUSE_OPTIONS.length - 1) % PAUSE_OPTIONS.length;
+    } else if (code === 'ArrowDown' || code === 'KeyS') {
+        pauseIndex = (pauseIndex + 1) % PAUSE_OPTIONS.length;
+    } else if (code === 'Enter' || code === 'Space' || code === 'NumpadEnter') {
+        applyPauseChoice();
+    }
+}
 
 document.addEventListener('keydown', (e) => {
     const wasPressed = keys[e.code];
@@ -418,6 +518,20 @@ document.addEventListener('keydown', (e) => {
             .catch(err => console.log('Audio still blocked:', err));
     }
     
+    // Pause first: while the menu is up it owns the keyboard, so Space and the
+    // arrows drive the menu rather than Sonic.
+    const inLevel = currentGameState === 'playing' || currentGameState === 'seaside';
+    if (e.code === 'Escape' && inLevel) {
+        setPaused(!paused);
+        e.preventDefault();
+        return;
+    }
+    if (paused) {
+        handlePauseKey(e.code);
+        e.preventDefault();
+        return;
+    }
+
     if (currentGameState === 'intro' && e.code === 'Enter') {
         console.log('🎮 Starting game...');
         currentGameState = 'playing';
@@ -438,7 +552,7 @@ document.addEventListener('keydown', (e) => {
     // Numpad 0 sits right beside the arrow cluster, so the whole game can be
     // played one-handed. T does the same thing for anyone without a numpad.
     if (e.code === 'KeyT' || e.code === 'Numpad0') {
-        if (currentGameState === 'playing') setPlaneMode(!planeMode);
+        if (currentGameState === 'playing' && zoneClearTimer <= 0) setPlaneMode(!planeMode);
         else if (currentGameState === 'seaside') Seaside.togglePlane();
     }
 
@@ -654,6 +768,11 @@ const TITLE_TEXT = 'GREENHILL ZONE 26';
 const TITLE_DURATION = 5 * 60;      // 5 seconds at 60fps
 const TITLE_FADE = 45;              // frames it takes to fade out at the end
 let titleTimer = 0;
+
+// The pause on ZONE CLEAR after the goal post, before the second zone loads.
+// Same length as Seaside's, so finishing either zone feels the same.
+const ZONE_CLEAR_DURATION = 240;
+let zoneClearTimer = 0;
 
 const BOSS_HITS_TO_WIN = 10;
 const BOSS_HEIGHT = worldSize(4);
@@ -1220,6 +1339,7 @@ function initializeGame() {
 
     createBoss();
     titleTimer = TITLE_DURATION;
+    zoneClearTimer = 0;
 
     // Reset Sonic — back on foot, whatever the player was flying a moment ago
     setPlaneMode(false);
@@ -1504,6 +1624,19 @@ function updateOnFoot() {
 
 // Main game update loop
 function update() {
+    // Past the goal post the level holds still on the ZONE CLEAR card, then
+    // beating Eggman opens the way to the second zone.
+    if (zoneClearTimer > 0) {
+        zoneClearTimer--;
+        if (zoneClearTimer === 0) {
+            music.pause();
+            currentGameState = 'seaside';
+            Seaside.init();
+        }
+        Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
+        return;
+    }
+
     if (sonic.isDead) {
         updateDeath();
         Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
@@ -1606,13 +1739,7 @@ function update() {
 
         levelEndSign.crossed = true;
         playLevelCompleteSound();
-
-        // Beating Eggman opens the way to the second zone.
-        setTimeout(() => {
-            music.pause();
-            currentGameState = 'seaside';
-            Seaside.init();
-        }, 1500);
+        zoneClearTimer = ZONE_CLEAR_DURATION;   // held on the ZONE CLEAR card
     }
     
     // Sonic animation (the plane has a single frame, so skip it while flying)
@@ -1679,11 +1806,9 @@ function renderIntro() {
     if (Math.floor(elapsed / 500) % 2 === 0) {
         ctx.fillStyle = 'yellow';
     }
+    // The zone list lives in the page's top-right corner (#levelSelect); down
+    // here it was landing underneath the control text.
     ctx.fillText('Press ENTER to Start', canvas.width / 2, canvas.height - 62);
-
-    ctx.font = 'bold 16px Arial';
-    ctx.fillStyle = '#9fd8ff';
-    ctx.fillText('Press 2 for SEASIDE HILL 26', canvas.width / 2, canvas.height - 32);
 }
 
 const SKY_COLOR = '#1810bb';       // sampled from the paintings
@@ -1977,6 +2102,69 @@ function renderGame() {
     ctx.restore();
 
     drawTitleCard();            // screen space, so outside the camera transform
+    drawZoneClear();
+}
+
+// The finish card, matching the one Seaside puts up when its goal is taken.
+function drawZoneClear() {
+    if (zoneClearTimer <= 0) return;
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 52px Arial';
+    ctx.lineWidth = 9;
+    ctx.strokeStyle = '#001040';
+    ctx.strokeText('ZONE CLEAR', canvas.width / 2, canvas.height / 2);
+    ctx.fillStyle = '#ffd83a';
+    ctx.fillText('ZONE CLEAR', canvas.width / 2, canvas.height / 2);
+    ctx.restore();
+}
+
+// Drawn over whichever zone is paused, so both share one menu.
+function drawPauseMenu() {
+    if (!paused) return;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 8, 32, 0.85)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = 'bold 40px Arial';
+    ctx.fillStyle = '#ffd83a';
+    ctx.fillText('PAUSED', canvas.width / 2, 62);
+
+    ctx.textAlign = 'left';
+    let y = 108;
+    for (const [zone, lines] of PAUSE_TIPS) {
+        ctx.font = 'bold 17px Arial';
+        ctx.fillStyle = '#3aa0ff';
+        ctx.fillText(zone, 70, y);
+        y += 23;
+
+        ctx.font = '14px Arial';
+        ctx.fillStyle = '#eaf6ff';
+        for (const line of lines) {
+            ctx.fillText(line, 88, y);
+            y += 19;
+        }
+        y += 14;
+    }
+
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 20px Arial';
+    PAUSE_OPTIONS.forEach((option, i) => {
+        const selected = i === pauseIndex;
+        ctx.fillStyle = selected ? '#ffd83a' : '#9fb6d8';
+        ctx.fillText(selected ? `▸ ${option} ◂` : option,
+                     canvas.width / 2, canvas.height - 150 + i * 28);
+    });
+
+    ctx.font = '13px Arial';
+    ctx.fillStyle = '#9fd8ff';
+    ctx.fillText('UP / DOWN to choose  ·  ENTER to confirm  ·  ESC to resume',
+                 canvas.width / 2, canvas.height - 16);
+    ctx.restore();
 }
 
 function drawSonic() {
@@ -2050,19 +2238,23 @@ function updateUI() {
 
 // Main game loop
 function gameLoop() {
+    refreshScreenTips();
+
     if (currentGameState === 'seaside') {
-        Seaside.update();
+        if (!paused) Seaside.update();
         Seaside.render();
         updateUI();
+        drawPauseMenu();
         Object.keys(keysPressed).forEach(key => { keysPressed[key] = false; });
         requestAnimationFrame(gameLoop);
         return;
     }
 
-    if (currentGameState === 'playing') {
+    if (currentGameState === 'playing' && !paused) {
         update();
     }
     render();
+    drawPauseMenu();
     if (currentGameState === 'playing') {
         updateUI();
     }
