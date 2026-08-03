@@ -404,10 +404,25 @@ function introVideoReady() {
            introVideo.videoWidth > 0;
 }
 
-// Browsers only allow autoplay in silence, so the video opens muted and the
-// first key or click turns it up. After that it starts with sound, so coming
-// back to the title screen later plays it properly from the top.
+// No browser lets a page make a sound before the visitor has touched it, so the
+// title screen waits on PRESS ANY KEY and starts the video on that press — the
+// press is the permission, and picture and audio start together from 0:00.
+// Only the first visit is gated; coming back from the pause menu plays straight
+// away, because by then the page has its permission.
+let introStarted = false;
 let introAudioUnlocked = false;
+
+function openTitleGate() {
+    if (introStarted) return;
+    introStarted = true;
+    introStartTime = Date.now();
+
+    // The queued Sega jingle is dropped rather than fired on this same key, so
+    // it doesn't land on top of the video's own opening.
+    window.immediateAudio = null;
+
+    startIntroVideo();
+}
 
 function startIntroVideo() {
     if (!introVideo) return;
@@ -421,9 +436,9 @@ function unlockIntroAudio() {
     if (!introVideo) return;
 
     introVideo.muted = false;
-    // Also covers the case where even the muted autoplay was refused: the
-    // gesture that unmutes it is the gesture that lets it start.
-    if (introVideo.paused && !introVideo.ended && currentGameState === 'intro') {
+    // Also covers the case where a play() was refused earlier: the gesture that
+    // unmutes it is the gesture that lets it start.
+    if (introStarted && introVideo.paused && !introVideo.ended && currentGameState === 'intro') {
         introVideo.play().catch(() => {});
     }
 }
@@ -433,6 +448,7 @@ function unlockIntroAudio() {
 // fallback for when there is no video to time against.
 function introTextVisible() {
     if (currentGameState !== 'intro') return true;
+    if (!introStarted) return false;    // the gate screen carries its own prompt
     if (introVideoReady()) return introVideo.currentTime >= INTRO_TEXT_DELAY;
     return (Date.now() - introStartTime) / 1000 >= INTRO_TEXT_DELAY;
 }
@@ -444,8 +460,11 @@ function noteGameState() {
     if (lastGameState === currentGameState) return;
     lastGameState = currentGameState;
 
-    if (currentGameState === 'intro') startIntroVideo();
-    else if (introVideo) introVideo.pause();     // no title audio over the level
+    if (currentGameState === 'intro') {
+        if (introStarted) startIntroVideo();     // else the gate is still up
+    } else if (introVideo) {
+        introVideo.pause();                      // no title audio over the level
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +593,14 @@ document.addEventListener('keydown', (e) => {
 
     unlockIntroAudio();
 
+    // PRESS ANY KEY. This first press is swallowed, so ENTER here starts the
+    // video rather than skipping straight past it into the level.
+    if (currentGameState === 'intro' && !introStarted) {
+        openTitleGate();
+        e.preventDefault();
+        return;
+    }
+
     if (window.immediateAudio) {
         window.immediateAudio.currentTime = 0;
         window.immediateAudio.play()
@@ -627,6 +654,11 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('click', () => {
     unlockIntroAudio();
+
+    if (currentGameState === 'intro' && !introStarted) {
+        openTitleGate();
+        return;
+    }
 
     if (window.immediateAudio) {
         window.immediateAudio.currentTime = 0;
@@ -1873,6 +1905,19 @@ function renderIntro() {
         ctx.fillText('THE HEDGEHOG', canvas.width / 2, canvas.height / 2);
     }
     
+    // Before the gate opens: the video's first frame, holding on the prompt.
+    if (!introStarted) {
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 28px Arial';
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = '#001040';
+        ctx.strokeText('PRESS ANY KEY', canvas.width / 2, canvas.height - 62);
+        ctx.fillStyle = Math.floor((Date.now() - introStartTime) / 500) % 2 === 0
+            ? 'yellow' : 'white';
+        ctx.fillText('PRESS ANY KEY', canvas.width / 2, canvas.height - 62);
+        return;
+    }
+
     if (!introTextVisible()) return;    // the video opens on its own
 
     ctx.fillStyle = 'white';
