@@ -344,17 +344,12 @@ const Seaside = {
     // Free flight: eight-way, no gravity, nothing to hit. Rings still count.
     updateFlight() {
         const s = this.sonic;
-        let ix = 0, iy = 0;
-        if (keys['ArrowUp'] || keys['KeyW']) { ix -= 1; iy -= 1; }
-        if (keys['ArrowDown'] || keys['KeyS']) { ix += 1; iy += 1; }
-        if (keys['ArrowLeft'] || keys['KeyA']) { ix -= 1; iy += 1; }
-        if (keys['ArrowRight'] || keys['KeyD']) { ix += 1; iy -= 1; }
+        const dir = this.inputDirection();
 
-        const len = Math.hypot(ix, iy);
-        if (len > 0) {
-            s.tx += (ix / len) * this.PLANE_SPEED;
-            s.ty += (iy / len) * this.PLANE_SPEED;
-            if (ix - iy !== 0) s.facing = ix - iy > 0 ? 1 : -1;
+        if (dir) {
+            s.tx += dir.x * this.PLANE_SPEED;
+            s.ty += dir.y * this.PLANE_SPEED;
+            if (dir.raw.x - dir.raw.y !== 0) s.facing = dir.raw.x - dir.raw.y > 0 ? 1 : -1;
         }
 
         s.tx = Math.min(Math.max(s.tx, 0.5), this.COLS - 0.5);
@@ -410,12 +405,36 @@ const Seaside = {
         this.camera.y += (this.screenY(s.tx, s.ty, s.z) - canvas.height / 2 - this.camera.y) * 0.12;
     },
 
+    // Which way the arrows point, in tile space. Screen up is diagonally back
+    // along both axes at once in this projection, which is why the mapping looks
+    // odd written down but comes out screen-aligned to play.
+    inputDirection() {
+        let ix = 0, iy = 0;
+        if (keys['ArrowUp'] || keys['KeyW']) { ix -= 1; iy -= 1; }
+        if (keys['ArrowDown'] || keys['KeyS']) { ix += 1; iy += 1; }
+        if (keys['ArrowLeft'] || keys['KeyA']) { ix -= 1; iy += 1; }
+        if (keys['ArrowRight'] || keys['KeyD']) { ix += 1; iy -= 1; }
+
+        const len = Math.hypot(ix, iy);
+        return len > 0 ? { x: ix / len, y: iy / len, raw: { x: ix, y: iy } } : null;
+    },
+
     readInput() {
         const s = this.sonic;
 
-        // Spin dash: hold down on the ground, release to fire along your facing.
-        if (keys['ArrowDown'] && s.onGround && !s.rolling) {
-            s.charging = true;
+        const dir = this.inputDirection();
+        if (dir) {
+            s.lastDir = { x: dir.x, y: dir.y };
+            if (dir.raw.x - dir.raw.y !== 0) s.facing = dir.raw.x - dir.raw.y > 0 ? 1 : -1;
+        }
+
+        // The spin dash lives on its own key out here. Down has to stay free for
+        // walking — all four arrows are directions in an eight-way level, and
+        // sharing Down meant pressing it fired a dash instead of moving.
+        const dashHeld = keys['KeyX'] || keys['ShiftLeft'] || keys['ShiftRight'];
+
+        if (dashHeld && s.onGround && !s.rolling) {
+            s.charging = true;                  // the arrows still aim it
             s.charge = Math.min(s.charge + 2, 100);
             s.vx = 0; s.vy = 0;
             return;
@@ -425,9 +444,9 @@ const Seaside = {
             s.rolling = true;
             s.rollTimer = 45;
             const power = this.SPEED * (2.2 + (s.charge / 100) * 2.6);
-            const dir = s.lastDir || { x: 1, y: 0 };
-            s.vx = dir.x * power;
-            s.vy = dir.y * power;
+            const aim = s.lastDir || { x: 1, y: 0 };
+            s.vx = aim.x * power;
+            s.vy = aim.y * power;
             s.charge = 0;
             playSpinDashLaunchSound();
             return;
@@ -437,24 +456,11 @@ const Seaside = {
             s.rollTimer--;
             s.vx *= 0.97; s.vy *= 0.97;
             if (s.rollTimer <= 0) s.rolling = false;
+        } else if (dir) {
+            s.vx = dir.x * this.SPEED;
+            s.vy = dir.y * this.SPEED;
         } else {
-            // Eight-way running. Screen up moves you away from the camera, which
-            // in this projection is diagonally back along both axes at once.
-            let ix = 0, iy = 0;
-            if (keys['ArrowUp'] || keys['KeyW']) { ix -= 1; iy -= 1; }
-            if (keys['ArrowDown'] || keys['KeyS']) { ix += 1; iy += 1; }
-            if (keys['ArrowLeft'] || keys['KeyA']) { ix -= 1; iy += 1; }
-            if (keys['ArrowRight'] || keys['KeyD']) { ix += 1; iy -= 1; }
-
-            const len = Math.hypot(ix, iy);
-            if (len > 0) {
-                s.vx = (ix / len) * this.SPEED;
-                s.vy = (iy / len) * this.SPEED;
-                s.lastDir = { x: ix / len, y: iy / len };
-                if (ix - iy !== 0) s.facing = ix - iy > 0 ? 1 : -1;
-            } else {
-                s.vx *= 0.7; s.vy *= 0.7;
-            }
+            s.vx *= 0.7; s.vy *= 0.7;
         }
 
         const jump = ['Space', 'KeyZ'].some(k => keysPressed[k]);
@@ -946,10 +952,11 @@ const Seaside = {
         ctx.fillStyle = '#eaf6ff';
         ctx.fillText(`RINGS LEFT ON THE ISLES: ${left}`, canvas.width - 13, 25);
 
-        ctx.textAlign = 'left';
+        // Kept top-right: the page's own control text sits bottom-left and this
+        // was landing underneath it.
         ctx.font = 'bold 13px Arial';
         ctx.fillStyle = '#bfe6ff';
-        ctx.fillText(this.planeMode ? 'TORNADO — T or NUMPAD 0 to land' : 'T or NUMPAD 0 for the Tornado', 12, canvas.height - 14);
+        ctx.fillText(this.planeMode ? 'TORNADO — T / NUMPAD 0 to land' : 'T / NUMPAD 0: Tornado   X: spin dash', canvas.width - 13, 45);
         ctx.restore();
 
         if (this.completeTimer > 0) {
