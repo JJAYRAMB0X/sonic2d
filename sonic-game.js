@@ -51,10 +51,13 @@ const LEVEL_ART = {
 // The drifts very nearly cancel over a pass (levelA +167, loop +125, spikes -283,
 // level3 -30, level2 +9 = -12), so the world stays level however long it runs
 // rather than sliding steadily downhill.
+// The two Level-2 paintings at the end are the boss arena. One alone is only
+// 409px, too cramped to fight in; Level-2 is a flat field, so a second copy
+// reads as one longer field rather than an obvious repeat.
 const LEVEL_ORDER = [
     'levelA', 'level3', 'loop', 'spikes', 'level2',
     'levelA', 'loop', 'level3', 'spikes', 'level2',
-    'levelA', 'level3', 'loop', 'spikes', 'level2'
+    'levelA', 'level3', 'loop', 'spikes', 'level2', 'level2'
 ];
 
 const LEVEL_SEGMENTS = [];
@@ -125,7 +128,7 @@ const worldSize = (tiles) => Math.round(tiles * LEVEL_TILE);
 // Asset loading system
 const images = {};
 let assetsLoaded = 0;
-const totalAssets = 24;
+const totalAssets = 25;         // 20 sprites and sounds, plus 5 level paintings
 
 // Game states
 let currentGameState = 'loading';
@@ -299,6 +302,7 @@ const assetPaths = {
     plane: 'FullAssets/Accessories/Soni-Tails-Plane.png',
     loadingScreen: 'assets/LoadingScreen.png',
     levelEndSign: 'assets/Level-End-Sign1.png',
+    eggman: 'FullAssets/downloads/SRCDrEggman.webp',
     badnik1_frame1: 'assets/badnik1_frame1.png',
     badnik1_frame2: 'assets/badnik1_frame2.png',
     badnik2_frame1: 'assets/badnik2_frame1.png',
@@ -616,9 +620,163 @@ function updatePlane() {
 let rings = [];
 let badniks = [];
 let levelEndSign = null;
+let boss = null;
 
 // The goal is at the far end of the last painting, on Level-2's flat field.
 const LEVEL_END_X = LAST_SEGMENT.x + LAST_SEGMENT.width - worldSize(4);
+
+// ---------------------------------------------------------------------------
+// THE BOSS
+//
+// Eggman hops back and forth across the flat Level-2 field at the end of the
+// level. Land on his head to hurt him, touch him any other way and he hurts
+// you. Ten hits and he is done; only then does the goal post drop in.
+// ---------------------------------------------------------------------------
+// Zone title card, shown over the opening of the level.
+const TITLE_TEXT = 'GREENHILL ZONE 26';
+const TITLE_DURATION = 5 * 60;      // 5 seconds at 60fps
+const TITLE_FADE = 45;              // frames it takes to fade out at the end
+let titleTimer = 0;
+
+const BOSS_HITS_TO_WIN = 10;
+const BOSS_HEIGHT = worldSize(4);
+const BOSS_WIDTH = Math.round(BOSS_HEIGHT * 611 / 953);     // the sprite's aspect
+const BOSS_WALK = 2.4;
+const BOSS_HOP = 13;
+const BOSS_GRACE = 45;              // frames of flashing after a hit
+
+// The arena is the run of Level-2 paintings the level finishes on.
+function bossArena() {
+    let left = LEVEL_SEGMENTS.length - 1;
+    while (left > 0 && LEVEL_SEGMENTS[left - 1].art === LAST_SEGMENT.art) left--;
+    return {
+        left: LEVEL_SEGMENTS[left].x + worldSize(1),
+        right: LEVEL_WIDTH - worldSize(1)
+    };
+}
+
+function createBoss() {
+    const arena = bossArena();
+    const x = (arena.left + arena.right) / 2 - BOSS_WIDTH / 2;
+
+    boss = {
+        left: arena.left,
+        right: arena.right,
+        x: x,
+        y: getGroundLevel(x + BOSS_WIDTH / 2) - BOSS_HEIGHT,
+        width: BOSS_WIDTH,
+        height: BOSS_HEIGHT,
+        velocityX: -BOSS_WALK,
+        velocityY: 0,
+        onGround: true,
+        hopTimer: 60,
+        facing: 1,                  // flipped on every hit for a visual jolt
+        hits: 0,
+        graceTimer: 0,
+        awake: false,
+        defeated: false,
+        defeatTimer: 0
+    };
+}
+
+function updateBoss() {
+    if (!boss) return;
+
+    if (boss.defeated) {
+        // Knocked out: he tumbles away rather than standing there.
+        boss.velocityY += GRAVITY * 0.6;
+        boss.y += boss.velocityY;
+        boss.facing = boss.defeatTimer % 8 < 4 ? 1 : -1;
+        boss.defeatTimer++;
+        return;
+    }
+
+    // He stays put until Sonic actually reaches the arena.
+    if (!boss.awake) {
+        if (sonic.x + sonic.width < boss.left - canvas.width / 2) return;
+        boss.awake = true;
+    }
+
+    boss.velocityY += GRAVITY * 0.8;
+    boss.x += boss.velocityX;
+    boss.y += boss.velocityY;
+
+    const ground = getGroundLevel(boss.x + boss.width / 2);
+    boss.onGround = false;
+    if (boss.velocityY >= 0 && boss.y + boss.height >= ground) {
+        boss.y = ground - boss.height;
+        boss.velocityY = 0;
+        boss.onGround = true;
+    }
+
+    if (boss.x < boss.left) { boss.x = boss.left; boss.velocityX = Math.abs(boss.velocityX); }
+    if (boss.x + boss.width > boss.right) {
+        boss.x = boss.right - boss.width;
+        boss.velocityX = -Math.abs(boss.velocityX);
+    }
+
+    // Bowser-ish: hop on a timer, and sometimes turn around on landing.
+    if (boss.onGround) {
+        boss.hopTimer--;
+        if (boss.hopTimer <= 0) {
+            boss.velocityY = -BOSS_HOP;
+            boss.hopTimer = 45 + Math.floor(Math.random() * 45);
+            if (Math.random() < 0.35) boss.velocityX *= -1;
+        }
+    }
+
+    if (boss.graceTimer > 0) boss.graceTimer--;
+}
+
+function bossCollision() {
+    if (!boss || !boss.awake || boss.defeated || planeMode || sonic.isDead) return;
+    if (!overlaps(sonic, boss)) return;
+
+    // A stomp is coming down onto his upper half; anything else is a hit on you.
+    const stomping = sonic.velocityY > 0 && sonic.y + sonic.height < boss.y + boss.height * 0.6;
+
+    if (boss.graceTimer > 0) return;
+
+    if (stomping) {
+        boss.hits++;
+        boss.graceTimer = BOSS_GRACE;
+        boss.facing *= -1;
+        boss.velocityX = Math.abs(boss.velocityX) * (sonic.x < boss.x ? 1 : -1);
+        sonic.velocityY = -15;
+        sonic.canDoubleJump = true;
+        sonic.lastJumpTime = Date.now();
+        playBadnikDestroySound();
+
+        if (boss.hits >= BOSS_HITS_TO_WIN) defeatBoss();
+    } else if (!sonic.isHurt) {
+        hurtSonic(sonic.x < boss.x ? -1 : 1);
+    }
+}
+
+// The goal post is not part of the scenery — it drops from the sky once the
+// fight is won, and only then can it be crossed.
+function dropEndSign() {
+    if (levelEndSign) levelEndSign.active = true;
+}
+
+function updateEndSign() {
+    if (!levelEndSign || !levelEndSign.active) return;
+    if (levelEndSign.y >= levelEndSign.restingY) return;
+
+    levelEndSign.fallSpeed = Math.min(levelEndSign.fallSpeed + GRAVITY, 26);
+    levelEndSign.y = Math.min(levelEndSign.y + levelEndSign.fallSpeed, levelEndSign.restingY);
+
+    if (levelEndSign.y >= levelEndSign.restingY) playSpringSound();
+}
+
+function defeatBoss() {
+    boss.defeated = true;
+    boss.defeatTimer = 0;
+    boss.velocityX = 0;
+    boss.velocityY = -12;
+    playLevelCompleteSound();
+    dropEndSign();                  // the goal only appears once he is beaten
+}
 
 const SPRING_SPRITE_SIZE = { width: worldSize(1.4), height: worldSize(0.8) };
 
@@ -1030,13 +1188,21 @@ function initializeGame() {
     // Create level end sign
     const signWidth = worldSize(2.5);
     const signHeight = worldSize(3.5);
+    // Parked off the top of the world until the boss goes down, then dropped in.
+    const signResting = getGroundLevel(LEVEL_END_X + signWidth / 2) - signHeight;
     levelEndSign = {
         x: LEVEL_END_X,
-        y: getGroundLevel(LEVEL_END_X + signWidth / 2) - signHeight,
+        y: signResting - worldSize(20),
+        restingY: signResting,
         width: signWidth,
         height: signHeight,
+        fallSpeed: 0,
+        active: false,
         crossed: false
     };
+
+    createBoss();
+    titleTimer = TITLE_DURATION;
 
     // Reset Sonic — back on foot, whatever the player was flying a moment ago
     setPlaneMode(false);
@@ -1203,10 +1369,26 @@ function updateOnFoot() {
         sonic.isRolling = false;
     }
 
-    if (sonic.y + sonic.height > getGroundLevel(sonic.x + sonic.width / 2) + MAX_STEP) {
+    // Running into a wall never dead-stops the run. Sonic vaults instead, as
+    // though he had jumped a moment before hitting it, and keeps his speed so
+    // he rises against the face and carries on over anything low enough. Only
+    // grounded contact vaults, so he cannot ratchet his way up a tall wall: a
+    // face he can't clear drops him back to the same spot to try again.
+    const blockedByWall = sonic.y + sonic.height > getGroundLevel(sonic.x + sonic.width / 2) + MAX_STEP;
+
+    if (blockedByWall) {
         sonic.x = previousX;
-        sonic.velocityX = 0;
-        sonic.isRolling = false;
+
+        if (sonic.onGround && Math.abs(sonic.velocityX) > 1) {
+            sonic.velocityY = -sonic.jumpPower;
+            sonic.onGround = false;
+            sonic.canDoubleJump = true;
+            sonic.lastJumpTime = Date.now();
+            playJumpSound();
+        } else {
+            sonic.velocityX = 0;
+            sonic.isRolling = false;
+        }
     }
 
     sonic.y += sonic.velocityY;
@@ -1316,6 +1498,10 @@ function update() {
     }
 
     updateLostRings();
+    updateBoss();
+    bossCollision();
+    updateEndSign();
+    if (titleTimer > 0) titleTimer--;
 
     // Camera follows Sonic, clamped to what the paintings actually cover. The
     // chained level is only a little taller than the canvas, so the vertical
@@ -1398,7 +1584,7 @@ function update() {
     
     // Check level end sign. Passing the post is what counts, at any height —
     // otherwise a springboard flight sails straight over the goal.
-    if (levelEndSign && !levelEndSign.crossed && !sonic.isDead &&
+    if (levelEndSign && levelEndSign.active && !levelEndSign.crossed && !sonic.isDead &&
         sonic.x + sonic.width / 2 > levelEndSign.x + levelEndSign.width / 2) {
 
         levelEndSign.crossed = true;
@@ -1516,6 +1702,71 @@ function drawLoopRails() {
         ctx.arc(loop.cx, loop.cy, loop.radius, 0, Math.PI * 2);
         ctx.stroke();
     }
+    ctx.restore();
+}
+
+// Eggman, with a damage meter above him built like Sonic's spin dash bar.
+function drawBoss() {
+    if (!boss || !boss.awake) return;
+    if (boss.defeated && boss.y > LEVEL_BOTTOM + 200) return;
+
+    const art = images.eggman;
+
+    ctx.save();
+    ctx.translate(boss.x + boss.width / 2, boss.y + boss.height / 2);
+
+    // Flashing while he shrugs off a hit.
+    if (boss.graceTimer > 0 && Math.floor(boss.graceTimer / 5) % 2 === 0) ctx.globalAlpha = 0.45;
+    if (boss.facing === -1) ctx.scale(-1, 1);
+    if (boss.defeated) ctx.rotate(boss.defeatTimer * 0.12);
+
+    if (art) {
+        ctx.drawImage(art, -boss.width / 2, -boss.height / 2, boss.width, boss.height);
+    } else {
+        ctx.fillStyle = '#d02020';
+        ctx.fillRect(-boss.width / 2, -boss.height / 2, boss.width, boss.height);
+    }
+    ctx.restore();
+
+    if (boss.defeated) return;
+
+    const damage = boss.hits / BOSS_HITS_TO_WIN;
+    const barWidth = boss.width * 1.4;
+    const barHeight = 12;
+    const barX = boss.x + boss.width / 2 - barWidth / 2;
+    const barY = boss.y - 26;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+
+    ctx.fillStyle = damage > 0.8 ? '#FF0000' : '#FFFF00';
+    ctx.fillRect(barX + 2, barY + 2, (barWidth - 4) * damage, barHeight - 4);
+
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+}
+
+// Zone title over the opening of the level, in screen space.
+function drawTitleCard() {
+    if (titleTimer <= 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, titleTimer / TITLE_FADE);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    const x = canvas.width / 2;
+    const y = canvas.height / 2 - 40;
+
+    ctx.font = 'bold 62px Arial, sans-serif';
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = '#001040';
+    ctx.strokeText(TITLE_TEXT, x, y);
+
+    ctx.fillStyle = '#3aa0ff';
+    ctx.fillText(TITLE_TEXT, x, y);
+
     ctx.restore();
 }
 
@@ -1666,6 +1917,8 @@ function renderGame() {
         }
     }
     
+    drawBoss();
+
     // Draw the player — the Tornado in plane mode, Sonic otherwise
     if (planeMode) {
         drawPlane();
@@ -1693,11 +1946,13 @@ function renderGame() {
     }
 
     // Draw level end sign
-    if (levelEndSign && images.levelEndSign && !levelEndSign.crossed) {
+    if (levelEndSign && levelEndSign.active && images.levelEndSign && !levelEndSign.crossed) {
         ctx.drawImage(images.levelEndSign, levelEndSign.x, levelEndSign.y, levelEndSign.width, levelEndSign.height);
     }
 
     ctx.restore();
+
+    drawTitleCard();            // screen space, so outside the camera transform
 }
 
 function drawSonic() {
