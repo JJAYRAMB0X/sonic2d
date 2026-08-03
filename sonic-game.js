@@ -437,8 +437,9 @@ document.addEventListener('keydown', (e) => {
 
     // Numpad 0 sits right beside the arrow cluster, so the whole game can be
     // played one-handed. T does the same thing for anyone without a numpad.
-    if (currentGameState === 'playing' && (e.code === 'KeyT' || e.code === 'Numpad0')) {
-        setPlaneMode(!planeMode);
+    if (e.code === 'KeyT' || e.code === 'Numpad0') {
+        if (currentGameState === 'playing') setPlaneMode(!planeMode);
+        else if (currentGameState === 'seaside') Seaside.togglePlane();
     }
 
     e.preventDefault();

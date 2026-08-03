@@ -73,6 +73,10 @@ const Seaside = {
 
     placedIslands: [],
 
+    PLANE_SPEED: 0.22,          // faster than running, for scouting the map
+    PLANE_CLEARANCE: 110,       // how far above the tallest ground it cruises
+    planeMode: false,
+
     cells: null,
     rings: [],
     monitors: [],
@@ -130,7 +134,7 @@ const Seaside = {
                 this.stampDisc(
                     a.x + (b.x - a.x) * t,
                     a.y + (b.y - a.y) * t,
-                    a.r + (b.r - a.r) * t - 1.4,        // the link is narrower than the pads
+                    a.r + (b.r - a.r) * t - 0.9,        // the link is narrower than the pads
                     t < 0.5 ? a.z : b.z
                 );
             }
@@ -139,12 +143,34 @@ const Seaside = {
         const last = this.SPINE[this.SPINE.length - 1];
         this.stampDisc(last.x, last.y, last.r, last.z);
 
+        this.fillPinholes();
+
         this.placedIslands = [];
         for (const spec of this.ISLANDS) {
             const island = this.placeIsland(spec);
             if (!island) continue;
             this.stampDisc(island.x, island.y, island.r, island.z);
             this.placedIslands.push(island);
+        }
+    },
+
+    // Where two stamped pads meet, the coastline comes out ragged and can leave
+    // a single water tile with land on three sides. Those look like solid path
+    // and drop you in the sea, so they get filled in.
+    fillPinholes() {
+        for (let pass = 0; pass < 2; pass++) {
+            const fill = [];
+            for (let y = 1; y < this.ROWS - 1; y++) {
+                for (let x = 1; x < this.COLS - 1; x++) {
+                    if (this.cells[y][x] !== null) continue;
+                    const around = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+                        .map(([dx, dy]) => this.cells[y + dy][x + dx])
+                        .filter(v => v !== null);
+                    if (around.length >= 3) fill.push([x, y, Math.max(...around)]);
+                }
+            }
+            if (!fill.length) return;
+            for (const [x, y, level] of fill) this.cells[y][x] = level;
         }
     },
 
@@ -285,6 +311,58 @@ const Seaside = {
 
     stopMusic() { if (this.music) this.music.pause(); },
 
+    cruiseZ() {
+        let top = 0;
+        for (let y = 0; y < this.ROWS; y++) {
+            for (let x = 0; x < this.COLS; x++) {
+                if (this.cells[y][x] !== null) top = Math.max(top, this.cells[y][x]);
+            }
+        }
+        return top * this.LIFT + this.PLANE_CLEARANCE;
+    },
+
+    // The Tornado, same as Level 1's: it ignores the ground entirely, so it is
+    // the way to go and look at the map without falling in the sea.
+    togglePlane() {
+        const s = this.sonic;
+        this.planeMode = !this.planeMode;
+
+        s.vx = 0; s.vy = 0; s.vz = 0;
+        s.rolling = false;
+        s.charging = false;
+        s.charge = 0;
+
+        if (this.planeMode) {
+            s.z = this.cruiseZ();
+        } else if (this.groundZ(s.tx, s.ty) === null) {
+            // Stepped out over open water — put him back on solid ground.
+            s.tx = s.safeX; s.ty = s.safeY; s.z = s.safeZ + 20;
+        }
+        console.log(this.planeMode ? '✈ Tornado' : 'On foot');
+    },
+
+    // Free flight: eight-way, no gravity, nothing to hit. Rings still count.
+    updateFlight() {
+        const s = this.sonic;
+        let ix = 0, iy = 0;
+        if (keys['ArrowUp'] || keys['KeyW']) { ix -= 1; iy -= 1; }
+        if (keys['ArrowDown'] || keys['KeyS']) { ix += 1; iy += 1; }
+        if (keys['ArrowLeft'] || keys['KeyA']) { ix -= 1; iy += 1; }
+        if (keys['ArrowRight'] || keys['KeyD']) { ix += 1; iy -= 1; }
+
+        const len = Math.hypot(ix, iy);
+        if (len > 0) {
+            s.tx += (ix / len) * this.PLANE_SPEED;
+            s.ty += (iy / len) * this.PLANE_SPEED;
+            if (ix - iy !== 0) s.facing = ix - iy > 0 ? 1 : -1;
+        }
+
+        s.tx = Math.min(Math.max(s.tx, 0.5), this.COLS - 0.5);
+        s.ty = Math.min(Math.max(s.ty, 0.5), this.ROWS - 0.5);
+        s.z = this.cruiseZ();
+        s.onGround = false;
+    },
+
     centreCamera() {
         const s = this.sonic;
         this.camera.x = this.screenX(s.tx, s.ty) - canvas.width / 2;
@@ -320,8 +398,12 @@ const Seaside = {
 
         gameData.time = Math.floor((Date.now() - gameData.gameStartTime) / 1000);
 
-        this.readInput();
-        this.moveSonic();
+        if (this.planeMode) {
+            this.updateFlight();
+        } else {
+            this.readInput();
+            this.moveSonic();
+        }
         this.collect();
 
         this.camera.x += (this.screenX(s.tx, s.ty) - canvas.width / 2 - this.camera.x) * 0.12;
@@ -460,25 +542,27 @@ const Seaside = {
         return true;
     },
 
+    // Going in the sea costs your rings and puts you back on the last ground you
+    // stood on. It is deliberately not fatal: the sea is the only hazard in the
+    // zone, and restarting the whole level for a misjudged edge — on a map that
+    // takes a while to learn to read — is just punishing.
     drown() {
         const s = this.sonic;
+
         if (gameData.rings > 0) {
-            // The rings go in the water with him rather than bouncing loose —
-            // Level 1's scatter physics read the side-on heightmap, which does
-            // not exist out here.
+            // The rings go in with him rather than bouncing loose; Level 1's
+            // scatter physics read the side-on heightmap, which is not out here.
             gameData.rings = 0;
             playRingScatterSound();
-            playSonicHurtSound();
-            s.tx = s.safeX; s.ty = s.safeY; s.z = s.safeZ + 40;
-            s.vx = 0; s.vy = 0; s.vz = 0;
-            s.hurtTimer = 90;
-        } else {
-            s.dead = true;
-            s.deadTimer = 130;
-            s.vz = 9;
-            this.stopMusic();
-            playSonicDeathSound();
         }
+        playSonicHurtSound();
+
+        s.tx = s.safeX; s.ty = s.safeY; s.z = s.safeZ + 40;
+        s.vx = 0; s.vy = 0; s.vz = 0;
+        s.rolling = false;
+        s.charging = false;
+        s.charge = 0;
+        s.hurtTimer = 70;
     },
 
     collect() {
@@ -611,6 +695,26 @@ const Seaside = {
                 ctx.lineTo(cx - halfW, cy);
                 ctx.closePath();
                 ctx.fill();
+
+                // Foam along any edge that meets open water. Without it the
+                // brink is genuinely hard to read and you walk off it.
+                const top = [cx, cy - halfH], right = [cx + halfW, cy];
+                const bottom = [cx, cy + halfH], left = [cx - halfW, cy];
+                const edges = [
+                    [this.levelAt(tx + 1, ty), right, bottom],
+                    [this.levelAt(tx, ty + 1), left, bottom],
+                    [this.levelAt(tx - 1, ty), top, left],
+                    [this.levelAt(tx, ty - 1), top, right]
+                ];
+                ctx.strokeStyle = '#f2fbff';
+                ctx.lineWidth = 3;
+                for (const [neighbour, a, b] of edges) {
+                    if (neighbour !== null) continue;
+                    ctx.beginPath();
+                    ctx.moveTo(a[0], a[1]);
+                    ctx.lineTo(b[0], b[1]);
+                    ctx.stroke();
+                }
             }
         }
     },
@@ -720,6 +824,22 @@ const Seaside = {
     drawSonic(s) {
         this.shadow(s.tx, s.ty);
 
+        if (this.planeMode) {
+            const plane = images.plane;
+            const height = 78;
+            const width = plane && plane.naturalHeight ? height * (plane.naturalWidth / plane.naturalHeight) : 116;
+            const px = this.screenX(s.tx, s.ty);
+            const py = this.screenY(s.tx, s.ty, s.z);
+
+            ctx.save();
+            ctx.translate(px, py - height / 2);
+            if (s.facing === 1) ctx.scale(-1, 1);       // the art faces left
+            if (plane) ctx.drawImage(plane, -width / 2, -height / 2, width, height);
+            else { ctx.fillStyle = '#d02020'; ctx.fillRect(-width / 2, -height / 2, width, height); }
+            ctx.restore();
+            return;
+        }
+
         const key = s.pose === 'run' ? this.RUN_FRAMES[s.frame] : this.POSE_SPRITES[s.pose];
         const sprite = images[key] || images.sonicStanding || images.sonicIdle;
         if (!sprite) return;
@@ -749,7 +869,74 @@ const Seaside = {
         }
     },
 
+    // A plan view of the isles in the corner. In an isometric level you cannot
+    // see where you are in the whole map, and without this it is very easy to
+    // lose the thread of where the route goes next.
+    drawMinimap() {
+        const scale = 2;
+        const w = this.COLS * scale, h = this.ROWS * scale;
+        const ox = canvas.width - w - 12, oy = canvas.height - h - 12;
+
+        ctx.save();
+        ctx.globalAlpha = 0.82;
+        ctx.fillStyle = '#04305c';
+        ctx.fillRect(ox - 4, oy - 4, w + 8, h + 8);
+        ctx.strokeStyle = '#9fd8ff';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(ox - 4, oy - 4, w + 8, h + 8);
+
+        for (let y = 0; y < this.ROWS; y++) {
+            for (let x = 0; x < this.COLS; x++) {
+                const level = this.cells[y][x];
+                if (level === null) continue;
+                const shade = 90 + level * 26;
+                ctx.fillStyle = `rgb(${Math.min(shade, 210)}, ${Math.min(140 + level * 22, 245)}, 80)`;
+                ctx.fillRect(ox + x * scale, oy + y * scale, scale, scale);
+            }
+        }
+
+        ctx.globalAlpha = 1;
+        if (!this.goal.taken) {
+            ctx.fillStyle = '#ffd83a';
+            ctx.fillRect(ox + this.goal.tx * scale - 2, oy + this.goal.ty * scale - 2, 5, 5);
+        }
+        ctx.fillStyle = this.planeMode ? '#ff5a5a' : '#ffffff';
+        ctx.fillRect(ox + this.sonic.tx * scale - 2, oy + this.sonic.ty * scale - 2, 4, 4);
+        ctx.restore();
+    },
+
+    // An arrow at the edge of the screen pointing at the goal.
+    drawGoalArrow() {
+        if (this.goal.taken) return;
+        const s = this.sonic;
+        const gx = this.screenX(this.goal.tx, this.goal.ty) - this.camera.x;
+        const gy = this.screenY(this.goal.tx, this.goal.ty, this.goal.z) - this.camera.y;
+        if (gx > 40 && gx < canvas.width - 40 && gy > 40 && gy < canvas.height - 40) return;
+
+        const cx = canvas.width / 2, cy = canvas.height / 2;
+        const angle = Math.atan2(gy - cy, gx - cx);
+        const radius = Math.min(canvas.width, canvas.height) / 2 - 46;
+
+        ctx.save();
+        ctx.translate(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
+        ctx.rotate(angle);
+        ctx.fillStyle = '#ffd83a';
+        ctx.strokeStyle = '#001040';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(16, 0);
+        ctx.lineTo(-10, -10);
+        ctx.lineTo(-10, 10);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+    },
+
     drawHud() {
+        this.drawMinimap();
+        this.drawGoalArrow();
+
         const left = this.rings.filter(r => !r.taken).length;
         ctx.save();
         ctx.font = 'bold 15px Arial';
@@ -758,6 +945,11 @@ const Seaside = {
         ctx.fillText(`RINGS LEFT ON THE ISLES: ${left}`, canvas.width - 12, 26);
         ctx.fillStyle = '#eaf6ff';
         ctx.fillText(`RINGS LEFT ON THE ISLES: ${left}`, canvas.width - 13, 25);
+
+        ctx.textAlign = 'left';
+        ctx.font = 'bold 13px Arial';
+        ctx.fillStyle = '#bfe6ff';
+        ctx.fillText(this.planeMode ? 'TORNADO — T or NUMPAD 0 to land' : 'T or NUMPAD 0 for the Tornado', 12, canvas.height - 14);
         ctx.restore();
 
         if (this.completeTimer > 0) {
