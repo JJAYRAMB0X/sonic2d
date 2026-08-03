@@ -104,6 +104,12 @@
     <div id="gameContainer">
         <div class="game-title">SONIC THE HEDGEHOG</div>
         <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <!-- Title screen footage. Never shown directly — renderIntro() draws it
+             into the canvas — so it stays hidden here. Muted because browsers
+             block autoplay with sound, and unlooped so it holds on its last
+             frame once it has played through. -->
+        <video id="introVideo" src="FullAssets/sonicintro.mp4"
+               muted playsinline preload="auto" style="display: none"></video>
         <div id="ui">
             <div>RINGS: <span id="ringCount">0</span></div>
             <div>TIME: <span id="gameTime">0:00</span></div>

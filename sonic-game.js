@@ -391,6 +391,64 @@ function startIntro() {
 }
 
 // ---------------------------------------------------------------------------
+// Title screen footage, drawn into the canvas by renderIntro(). It plays once
+// and holds on its last frame; it restarts on every fresh visit to the title
+// screen, including coming back from the pause menu.
+const introVideo = document.getElementById('introVideo');
+
+// How long the video runs clean before any text joins it.
+const INTRO_TEXT_DELAY = 4;         // seconds
+
+function introVideoReady() {
+    return !!introVideo && !introVideo.error && introVideo.readyState >= 2 &&
+           introVideo.videoWidth > 0;
+}
+
+// Browsers only allow autoplay in silence, so the video opens muted and the
+// first key or click turns it up. After that it starts with sound, so coming
+// back to the title screen later plays it properly from the top.
+let introAudioUnlocked = false;
+
+function startIntroVideo() {
+    if (!introVideo) return;
+    introVideo.currentTime = 0;
+    introVideo.muted = !introAudioUnlocked;
+    introVideo.play().catch(() => { /* the painted still covers for it */ });
+}
+
+function unlockIntroAudio() {
+    introAudioUnlocked = true;
+    if (!introVideo) return;
+
+    introVideo.muted = false;
+    // Also covers the case where even the muted autoplay was refused: the
+    // gesture that unmutes it is the gesture that lets it start.
+    if (introVideo.paused && !introVideo.ended && currentGameState === 'intro') {
+        introVideo.play().catch(() => {});
+    }
+}
+
+// Nothing is written over the opening seconds of the video. Timed off the
+// video itself so buffering can't eat the clean run, with the wall clock as a
+// fallback for when there is no video to time against.
+function introTextVisible() {
+    if (currentGameState !== 'intro') return true;
+    if (introVideoReady()) return introVideo.currentTime >= INTRO_TEXT_DELAY;
+    return (Date.now() - introStartTime) / 1000 >= INTRO_TEXT_DELAY;
+}
+
+// The video is restarted from here rather than from startIntro(), so that every
+// route back to the title screen replays it.
+let lastGameState = null;
+function noteGameState() {
+    if (lastGameState === currentGameState) return;
+    lastGameState = currentGameState;
+
+    if (currentGameState === 'intro') startIntroVideo();
+    else if (introVideo) introVideo.pause();     // no title audio over the level
+}
+
+// ---------------------------------------------------------------------------
 // On-page text. Bottom left carries the keys for whatever is on screen right
 // now — Level 1 never advertises Seaside's dash — and the top-right level list
 // belongs to the title screen alone, since in-game that corner is HUD.
@@ -408,16 +466,22 @@ const CONTROL_TIPS = {
 let tipsShownFor = null;
 
 function refreshScreenTips() {
-    if (tipsShownFor === currentGameState) return;
-    tipsShownFor = currentGameState;
+    // The ring and time readout goes too, so the opening of the video plays
+    // over a clean frame with nothing of ours on it.
+    const showText = introTextVisible();
+    const key = currentGameState + (showText ? ':text' : ':clean');
+    if (tipsShownFor === key) return;
+    tipsShownFor = key;
 
     const controls = document.getElementById('controls');
     const levels = document.getElementById('levelSelect');
-    const text = CONTROL_TIPS[currentGameState] || '';
+    const readout = document.getElementById('ui');
+    const text = showText ? (CONTROL_TIPS[currentGameState] || '') : '';
 
     controls.innerHTML = text;
     controls.style.display = text ? 'block' : 'none';
-    levels.style.display = currentGameState === 'intro' ? 'block' : 'none';
+    levels.style.display = currentGameState === 'intro' && showText ? 'block' : 'none';
+    readout.style.display = showText ? 'block' : 'none';
 }
 
 // Camera system
@@ -507,7 +571,9 @@ document.addEventListener('keydown', (e) => {
     if (!wasPressed) {
         keysPressed[e.code] = true;
     }
-    
+
+    unlockIntroAudio();
+
     if (window.immediateAudio) {
         window.immediateAudio.currentTime = 0;
         window.immediateAudio.play()
@@ -560,6 +626,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('click', () => {
+    unlockIntroAudio();
+
     if (window.immediateAudio) {
         window.immediateAudio.currentTime = 0;
         window.immediateAudio.play()
@@ -1779,14 +1847,21 @@ function render() {
 }
 
 function renderIntro() {
-    if (images.loadingScreen) {
-        const scale = Math.min(canvas.width / images.loadingScreen.width, canvas.height / images.loadingScreen.height);
-        const scaledWidth = images.loadingScreen.width * scale;
-        const scaledHeight = images.loadingScreen.height * scale;
+    // The mp4 once it has decoded a frame, the painted still until then and if
+    // it fails outright — the title screen is never blank.
+    const video = introVideoReady() ? introVideo : null;
+    const art = video || images.loadingScreen;
+    const artWidth = video ? video.videoWidth : (art ? art.width : 0);
+    const artHeight = video ? video.videoHeight : (art ? art.height : 0);
+
+    if (art && artWidth && artHeight) {
+        const scale = Math.min(canvas.width / artWidth, canvas.height / artHeight);
+        const scaledWidth = artWidth * scale;
+        const scaledHeight = artHeight * scale;
         const x = (canvas.width - scaledWidth) / 2;
         const y = (canvas.height - scaledHeight) / 2;
-        
-        ctx.drawImage(images.loadingScreen, x, y, scaledWidth, scaledHeight);
+
+        ctx.drawImage(art, x, y, scaledWidth, scaledHeight);
     } else {
         ctx.fillStyle = '#0066FF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1798,10 +1873,12 @@ function renderIntro() {
         ctx.fillText('THE HEDGEHOG', canvas.width / 2, canvas.height / 2);
     }
     
+    if (!introTextVisible()) return;    // the video opens on its own
+
     ctx.fillStyle = 'white';
     ctx.font = 'bold 24px Arial';
     ctx.textAlign = 'center';
-    
+
     const elapsed = Date.now() - introStartTime;
     if (Math.floor(elapsed / 500) % 2 === 0) {
         ctx.fillStyle = 'yellow';
@@ -2238,6 +2315,7 @@ function updateUI() {
 
 // Main game loop
 function gameLoop() {
+    noteGameState();
     refreshScreenTips();
 
     if (currentGameState === 'seaside') {
